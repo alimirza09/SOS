@@ -17,6 +17,6 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Install
-      run: cargo install bootimage && rustup install nightly
+      run: cargo install bootimage && rustup component add rust-src --toolchain nightly
     - name: Build
       run: cargo build --verbose
