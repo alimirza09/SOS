@@ -9,7 +9,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ea119c3ed05625c179e09d17d0914570a3753ca09c890a73d98f6b72aea00d2"
 
 [[package]]
-name = "sos2"
+name = "sos"
 version = "0.1.0"
 dependencies = [
  "bootloader",

@@ -1,16 +1,18 @@
 [package]
-name = "sos2"
+name = "sos"
 version = "0.1.0"
-edition = "2018"
+edition = "2021"
+include = ["**/*.rs", "Cargo.toml"]
 
 [profile.dev]
 panic = "abort"
+
 
 [profile.release]
 panic = "abort"
 
 [[bin]]
-name = "sos2"
+name = "sos"
 test = false
 bench = false
 
