@@ -1,0 +1,5 @@
+[target.i686-unknown-none]
+linker = "ld.lld"
+rustflags = [
+    "-C", "link-arg=-Tlinker.ld",
+]
