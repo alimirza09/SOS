@@ -2,6 +2,7 @@ use crate::{gdt, print, println};
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
 use spin;
+use spin::Mutex;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
 
 pub const PIC_1_OFFSET: u8 = 32;
@@ -14,6 +15,48 @@ pub enum InterruptIndex {
     Keyboard,
 }
 
+const KEYBUFFER_SIZE: usize = 128; // buffer can hold 128 chars
+
+pub struct RingBuffer {
+    buffer: [Option<char>; KEYBUFFER_SIZE],
+    head: usize,
+    tail: usize,
+}
+
+impl RingBuffer {
+    pub const fn new() -> Self {
+        Self {
+            buffer: [None; KEYBUFFER_SIZE],
+            head: 0,
+            tail: 0,
+        }
+    }
+
+    pub fn push(&mut self, c: char) {
+        let next = (self.head + 1) % KEYBUFFER_SIZE;
+        if next != self.tail {
+            self.buffer[self.head] = Some(c);
+            self.head = next;
+        }
+        // TODO: else
+    }
+
+    pub fn pop(&mut self) -> Option<char> {
+        if self.head == self.tail {
+            None // empty
+        } else {
+            let c = self.buffer[self.tail];
+            self.buffer[self.tail] = None;
+            self.tail = (self.tail + 1) % KEYBUFFER_SIZE;
+            c
+        }
+    }
+}
+
+lazy_static! {
+    pub static ref KEYBUFFER: Mutex<RingBuffer> = Mutex::new(RingBuffer::new());
+}
+
 impl InterruptIndex {
     fn as_u8(self) -> u8 {
         self as u8
@@ -22,6 +65,9 @@ impl InterruptIndex {
     fn as_usize(self) -> usize {
         usize::from(self.as_u8())
     }
+}
+pub fn init_idt() {
+    IDT.load();
 }
 
 pub static PICS: spin::Mutex<ChainedPics> =
@@ -42,10 +88,6 @@ lazy_static! {
     };
 }
 
-pub fn init_idt() {
-    IDT.load();
-}
-
 extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {
     println!("EXCEPTION: BREAKPOINT\n{:#?}", stack_frame);
 }
@@ -58,7 +100,6 @@ extern "x86-interrupt" fn double_fault_handler(
 }
 
 extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
-    print!(".");
     unsafe {
         PICS.lock()
             .notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
@@ -86,7 +127,7 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
     if let Ok(Some(key_event)) = keyboard.add_byte(scancode) {
         if let Some(key) = keyboard.process_keyevent(key_event) {
             match key {
-                DecodedKey::Unicode(character) => print!("{}", character),
+                DecodedKey::Unicode(character) => KEYBUFFER.lock().push(character),
                 DecodedKey::RawKey(key) => print!("{:?}", key),
             }
         }
@@ -98,8 +139,16 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
     }
 }
 
+pub fn wait_for_keypress() -> char {
+    loop {
+        if let Some(c) = KEYBUFFER.lock().pop() {
+            return c;
+        }
+        x86_64::instructions::hlt();
+    }
+}
+
 #[test_case]
 fn test_breakpoint_exception() {
-    // invoke a breakpoint exception
     x86_64::instructions::interrupts::int3();
 }

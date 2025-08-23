@@ -1,15 +1,5 @@
 use core::fmt;
-use lazy_static::lazy_static;
-use spin::Mutex;
 use volatile::Volatile;
-
-lazy_static! {
-    pub static ref WRITER: Mutex<Writer> = Mutex::new(Writer {
-        column_position: 0,
-        color_code: ColorCode::new(Color::Yellow, Color::Black),
-        buffer: unsafe { &mut *(0xb8000 as *mut Buffer) },
-    });
-}
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,24 +65,50 @@ impl Writer {
 
                 let row = BUFFER_HEIGHT - 1;
                 let col = self.column_position;
-
                 let color_code = self.color_code;
+
                 self.buffer.chars[row][col].write(ScreenChar {
                     ascii_character: byte,
                     color_code,
                 });
                 self.column_position += 1;
+                crate::sshell::update_cursor(row, self.column_position);
             }
         }
     }
 
-    fn write_string(&mut self, s: &str) {
+    pub fn write_string(&mut self, s: &str) {
         for byte in s.bytes() {
             match byte {
                 0x20..=0x7e | b'\n' => self.write_byte(byte),
                 _ => self.write_byte(0xfe),
             }
         }
+    }
+
+    pub fn set_color(&mut self, foreground: Color, background: Color) {
+        self.color_code = ColorCode::new(foreground, background);
+    }
+
+    pub fn get_color(&self) -> (Color, Color) {
+        let code = self.color_code.0;
+        let foreground = unsafe { core::mem::transmute(code & 0x0F) };
+        let background = unsafe { core::mem::transmute((code & 0xF0) >> 4) };
+        (foreground, background)
+    }
+
+    pub fn write_colored(&mut self, s: &str, foreground: Color, background: Color) {
+        let original_color = self.color_code;
+        self.set_color(foreground, background);
+        self.write_string(s);
+        self.color_code = original_color;
+    }
+
+    pub fn clear_screen(&mut self) {
+        for row in 0..BUFFER_HEIGHT {
+            self.clear_row(row);
+        }
+        self.column_position = 0;
     }
 
     fn new_line(&mut self) {
@@ -124,6 +140,17 @@ impl fmt::Write for Writer {
     }
 }
 
+use lazy_static::lazy_static;
+use spin::Mutex;
+
+lazy_static! {
+    pub static ref WRITER: Mutex<Writer> = Mutex::new(Writer {
+        column_position: 0,
+        color_code: ColorCode::new(Color::Yellow, Color::Black),
+        buffer: unsafe { &mut *(0xb8000 as *mut Buffer) },
+    });
+}
+
 #[macro_export]
 macro_rules! print {
     ($($arg:tt)*) => ($crate::vga_buffer::_print(format_args!($($arg)*)));
@@ -135,11 +162,31 @@ macro_rules! println {
     ($($arg:tt)*) => ($crate::print!("{}\n", format_args!($($arg)*)));
 }
 
+#[macro_export]
+macro_rules! print_colored {
+    ($fg:expr, $bg:expr, $($arg:tt)*) => ({
+        use core::fmt::Write;
+        let mut writer = $crate::vga_buffer::WRITER.lock();
+        writer.write_colored(&format!($($arg)*), $fg, $bg);
+    });
+}
+
+#[macro_export]
+macro_rules! println_colored {
+    ($fg:expr, $bg:expr) => ($crate::print_colored!($fg, $bg, "\n"));
+    ($fg:expr, $bg:expr, $($arg:tt)*) => ($crate::print_colored!($fg, $bg, "{}\n", format_args!($($arg)*)));
+}
+
+pub fn set_colors(foreground: Color, background: Color) {
+    WRITER.lock().set_color(foreground, background);
+}
+
+pub fn clear_screen() {
+    WRITER.lock().clear_screen();
+}
+
+#[doc(hidden)]
 pub fn _print(args: fmt::Arguments) {
     use core::fmt::Write;
-    use x86_64::instructions::interrupts;
-
-    interrupts::without_interrupts(|| {
-        WRITER.lock().write_fmt(args).unwrap();
-    });
+    WRITER.lock().write_fmt(args).unwrap();
 }

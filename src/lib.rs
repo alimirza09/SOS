@@ -14,6 +14,7 @@ pub mod sshell;
 pub mod vga_buffer;
 
 pub fn init() {
+    crate::sshell::enable_cursor(0, 15);
     gdt::init();
     interrupts::init_idt();
     unsafe { interrupts::PICS.lock().initialize() };

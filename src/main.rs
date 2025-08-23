@@ -5,14 +5,20 @@
 
 use core::panic::PanicInfo;
 use sos::println;
+use sos::sshell::read_line;
+use sos::vga_buffer::{clear_screen, set_colors, Color};
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
-    println!("Hello World{}", "!");
+    set_colors(Color::Green, Color::Black);
+    clear_screen();
+    println!("Welcome to sOS");
 
     sos::init();
 
-    println!("It did not crash!");
+    let mut buffer = [0u8; 128];
+    let n = read_line(&mut buffer);
+    println!("You typed: {}", core::str::from_utf8(&buffer[..n]).unwrap());
     sos::hlt_loop();
 }
 
