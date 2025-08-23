@@ -14,7 +14,7 @@ pub mod sshell;
 pub mod vga_buffer;
 
 pub fn init() {
-    crate::sshell::enable_cursor(0, 15);
+    crate::vga_buffer::init_vga_with_cursor();
     gdt::init();
     interrupts::init_idt();
     unsafe { interrupts::PICS.lock().initialize() };
@@ -72,7 +72,6 @@ pub fn hlt_loop() -> ! {
     }
 }
 
-/// Entry point for `cargo xtest`
 #[cfg(test)]
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {

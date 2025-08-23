@@ -18,7 +18,6 @@ pub extern "C" fn _start() -> ! {
 
     let mut buffer = [0u8; 128];
     let n = read_line(&mut buffer);
-    println!("You typed: {}", core::str::from_utf8(&buffer[..n]).unwrap());
     sos::hlt_loop();
 }
 

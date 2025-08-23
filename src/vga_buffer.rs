@@ -1,7 +1,20 @@
-use core::fmt;
-use volatile::Volatile;
+#![allow(dead_code)]
 
-#[allow(dead_code)]
+use core::fmt;
+use lazy_static::lazy_static;
+use spin::Mutex;
+use volatile::Volatile;
+use x86_64::instructions::port::Port;
+
+lazy_static! {
+    pub static ref WRITER: Mutex<Writer> = Mutex::new(Writer {
+        row_position: 0,
+        column_position: 0,
+        color_code: ColorCode::new(Color::Yellow, Color::Black),
+        buffer: unsafe { &mut *(0xb8000 as *mut Buffer) },
+    });
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Color {
@@ -25,11 +38,14 @@ pub enum Color {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
-struct ColorCode(u8);
+pub struct ColorCode(u8);
 
 impl ColorCode {
-    fn new(foreground: Color, background: Color) -> ColorCode {
+    pub const fn new(foreground: Color, background: Color) -> ColorCode {
         ColorCode((background as u8) << 4 | (foreground as u8))
+    }
+    pub const fn raw(self) -> u8 {
+        self.0
     }
 }
 
@@ -40,86 +56,157 @@ struct ScreenChar {
     color_code: ColorCode,
 }
 
-const BUFFER_HEIGHT: usize = 25;
-const BUFFER_WIDTH: usize = 80;
+pub const BUFFER_HEIGHT: usize = 25;
+pub const BUFFER_WIDTH: usize = 80;
 
 #[repr(transparent)]
 struct Buffer {
     chars: [[Volatile<ScreenChar>; BUFFER_WIDTH]; BUFFER_HEIGHT],
 }
 
+/* -------- cursor control -------- */
+
+fn update_cursor(row: usize, col: usize) {
+    use x86_64::instructions::port::Port;
+
+    let pos: u16 = (row as u16) * (BUFFER_WIDTH as u16) + (col as u16);
+    unsafe {
+        let mut crtc_index: Port<u8> = Port::new(0x3D4);
+        let mut crtc_data: Port<u8> = Port::new(0x3D5);
+
+        crtc_index.write(0x0F);
+        crtc_data.write((pos & 0xFF) as u8);
+        crtc_index.write(0x0E);
+        crtc_data.write(((pos >> 8) & 0xFF) as u8);
+    }
+}
+
+/// Enable hardware cursor; start/end are scanlines (0..=31 but VGA uses 0..=15).
+pub fn enable_cursor(start: u8, end: u8) {
+    unsafe {
+        let mut index_port = Port::<u8>::new(0x3D4);
+        let mut data_port = Port::<u8>::new(0x3D5);
+
+        index_port.write(0x0A);
+        let prev_a: u8 = data_port.read();
+        data_port.write((prev_a & 0xC0) | (start & 0x1F));
+
+        index_port.write(0x0B);
+        let prev_b: u8 = data_port.read();
+        data_port.write((prev_b & 0xE0) | (end & 0x1F));
+    }
+}
+
+pub fn disable_cursor() {
+    unsafe {
+        let mut index_port = Port::<u8>::new(0x3D4);
+        let mut data_port = Port::<u8>::new(0x3D5);
+
+        index_port.write(0x0A);
+        let _ = data_port.read(); // throwaway read to keep symmetry
+        data_port.write(0x20); // bit 5 = disable
+    }
+}
+
+/// Set cursor by absolute cell. Write low byte then high byte.
+fn set_cursor_pos_cell(cell: usize) {
+    let pos: u16 = cell as u16;
+    unsafe {
+        let mut index_port = Port::<u8>::new(0x3D4);
+        let mut data_port = Port::<u8>::new(0x3D5);
+
+        index_port.write(0x0F);
+        data_port.write((pos & 0xFF) as u8);
+
+        index_port.write(0x0E);
+        data_port.write((pos >> 8) as u8);
+    }
+}
+
+fn set_cursor_pos_rc(row: usize, col: usize) {
+    set_cursor_pos_cell(row * BUFFER_WIDTH + col);
+}
+
+/* -------- writer -------- */
+
 pub struct Writer {
-    column_position: usize,
+    pub row_position: usize,
+    pub column_position: usize,
     color_code: ColorCode,
     buffer: &'static mut Buffer,
 }
 
 impl Writer {
+    #[inline]
+    fn put_at(&mut self, row: usize, col: usize, byte: u8) {
+        self.buffer.chars[row][col].write(ScreenChar {
+            ascii_character: byte,
+            color_code: self.color_code,
+        });
+    }
+
+    #[inline]
+    fn sync_hw_cursor(&self) {
+        set_cursor_pos_rc(self.row_position, self.column_position);
+    }
+
     pub fn write_byte(&mut self, byte: u8) {
         match byte {
             b'\n' => self.new_line(),
+            b'\r' => self.column_position = 0,
+            0x08 => self.backspace(),
             byte => {
                 if self.column_position >= BUFFER_WIDTH {
                     self.new_line();
                 }
-
-                let row = BUFFER_HEIGHT - 1;
+                let row = self.row_position;
                 let col = self.column_position;
-                let color_code = self.color_code;
-
-                self.buffer.chars[row][col].write(ScreenChar {
-                    ascii_character: byte,
-                    color_code,
-                });
+                self.put_at(row, col, byte);
                 self.column_position += 1;
-                crate::sshell::update_cursor(row, self.column_position);
             }
         }
+        update_cursor(self.row_position, self.column_position);
     }
 
     pub fn write_string(&mut self, s: &str) {
         for byte in s.bytes() {
             match byte {
-                0x20..=0x7e | b'\n' => self.write_byte(byte),
+                0x20..=0x7e | b'\n' | b'\r' | 0x08 => self.write_byte(byte),
                 _ => self.write_byte(0xfe),
             }
         }
     }
 
-    pub fn set_color(&mut self, foreground: Color, background: Color) {
-        self.color_code = ColorCode::new(foreground, background);
-    }
-
-    pub fn get_color(&self) -> (Color, Color) {
-        let code = self.color_code.0;
-        let foreground = unsafe { core::mem::transmute(code & 0x0F) };
-        let background = unsafe { core::mem::transmute((code & 0xF0) >> 4) };
-        (foreground, background)
-    }
-
-    pub fn write_colored(&mut self, s: &str, foreground: Color, background: Color) {
-        let original_color = self.color_code;
-        self.set_color(foreground, background);
-        self.write_string(s);
-        self.color_code = original_color;
-    }
-
-    pub fn clear_screen(&mut self) {
-        for row in 0..BUFFER_HEIGHT {
-            self.clear_row(row);
+    fn backspace(&mut self) {
+        if self.column_position > 0 {
+            self.column_position -= 1;
+        } else if self.row_position > 0 {
+            self.row_position -= 1;
+            self.column_position = BUFFER_WIDTH - 1;
+        } else {
+            return;
         }
-        self.column_position = 0;
+        let row = self.row_position;
+        let col = self.column_position;
+        self.put_at(row, col, b' ');
+        update_cursor(row, col);
     }
 
     fn new_line(&mut self) {
+        if self.row_position < BUFFER_HEIGHT - 1 {
+            self.row_position += 1;
+            self.column_position = 0;
+            return;
+        }
         for row in 1..BUFFER_HEIGHT {
             for col in 0..BUFFER_WIDTH {
-                let character = self.buffer.chars[row][col].read();
-                self.buffer.chars[row - 1][col].write(character);
+                let chr = self.buffer.chars[row][col].read();
+                self.buffer.chars[row - 1][col].write(chr);
             }
         }
         self.clear_row(BUFFER_HEIGHT - 1);
         self.column_position = 0;
+        update_cursor(self.row_position, self.column_position);
     }
 
     fn clear_row(&mut self, row: usize) {
@@ -131,6 +218,34 @@ impl Writer {
             self.buffer.chars[row][col].write(blank);
         }
     }
+
+    pub fn set_color(&mut self, fg: Color, bg: Color) {
+        self.color_code = ColorCode::new(fg, bg);
+    }
+
+    pub fn get_color(&self) -> (Color, Color) {
+        let code = self.color_code.raw();
+        let fg = unsafe { core::mem::transmute::<u8, Color>(code & 0x0F) };
+        let bg = unsafe { core::mem::transmute::<u8, Color>((code & 0xF0) >> 4) };
+        (fg, bg)
+    }
+
+    pub fn write_colored(&mut self, s: &str, fg: Color, bg: Color) {
+        let old = self.color_code;
+        self.set_color(fg, bg);
+        self.write_string(s);
+        self.color_code = old;
+        self.sync_hw_cursor();
+    }
+
+    pub fn clear_screen(&mut self) {
+        for row in 0..BUFFER_HEIGHT {
+            self.clear_row(row);
+        }
+        self.row_position = 0;
+        self.column_position = 0;
+        self.sync_hw_cursor();
+    }
 }
 
 impl fmt::Write for Writer {
@@ -140,16 +255,7 @@ impl fmt::Write for Writer {
     }
 }
 
-use lazy_static::lazy_static;
-use spin::Mutex;
-
-lazy_static! {
-    pub static ref WRITER: Mutex<Writer> = Mutex::new(Writer {
-        column_position: 0,
-        color_code: ColorCode::new(Color::Yellow, Color::Black),
-        buffer: unsafe { &mut *(0xb8000 as *mut Buffer) },
-    });
-}
+/* -------- macros + helpers -------- */
 
 #[macro_export]
 macro_rules! print {
@@ -166,8 +272,11 @@ macro_rules! println {
 macro_rules! print_colored {
     ($fg:expr, $bg:expr, $($arg:tt)*) => ({
         use core::fmt::Write;
-        let mut writer = $crate::vga_buffer::WRITER.lock();
-        writer.write_colored(&format!($($arg)*), $fg, $bg);
+        use x86_64::instructions::interrupts;
+        interrupts::without_interrupts(|| {
+            let mut w = $crate::vga_buffer::WRITER.lock();
+            w.write_colored(&format!($($arg)*), $fg, $bg);
+        });
     });
 }
 
@@ -178,15 +287,40 @@ macro_rules! println_colored {
 }
 
 pub fn set_colors(foreground: Color, background: Color) {
-    WRITER.lock().set_color(foreground, background);
+    use x86_64::instructions::interrupts;
+    interrupts::without_interrupts(|| {
+        WRITER.lock().set_color(foreground, background);
+    });
+}
+
+pub fn get_colors() -> (Color, Color) {
+    use x86_64::instructions::interrupts;
+    interrupts::without_interrupts(|| WRITER.lock().get_color())
 }
 
 pub fn clear_screen() {
-    WRITER.lock().clear_screen();
+    use x86_64::instructions::interrupts;
+    interrupts::without_interrupts(|| {
+        WRITER.lock().clear_screen();
+    });
+    update_cursor(0, 0);
 }
 
-#[doc(hidden)]
 pub fn _print(args: fmt::Arguments) {
     use core::fmt::Write;
-    WRITER.lock().write_fmt(args).unwrap();
+    use x86_64::instructions::interrupts;
+
+    interrupts::without_interrupts(|| {
+        let mut w = WRITER.lock();
+        w.write_fmt(args).unwrap();
+        w.sync_hw_cursor();
+    });
+}
+
+pub fn init_vga_with_cursor() {
+    enable_cursor(0, 15);
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let w = WRITER.lock();
+        set_cursor_pos_rc(w.row_position, w.column_position);
+    });
 }
