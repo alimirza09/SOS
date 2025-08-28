@@ -1,0 +1,11 @@
+/home/ali/Projects/blog_os/target/x86_64-sos/debug/deps/futures_task-7bf9ce8f5f94798b.d: /home/ali/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-task-0.3.31/src/lib.rs /home/ali/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-task-0.3.31/src/spawn.rs /home/ali/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-task-0.3.31/src/arc_wake.rs /home/ali/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-task-0.3.31/src/waker.rs /home/ali/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-task-0.3.31/src/waker_ref.rs /home/ali/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-task-0.3.31/src/future_obj.rs /home/ali/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-task-0.3.31/src/noop_waker.rs
+
+/home/ali/Projects/blog_os/target/x86_64-sos/debug/deps/libfutures_task-7bf9ce8f5f94798b.rmeta: /home/ali/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-task-0.3.31/src/lib.rs /home/ali/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-task-0.3.31/src/spawn.rs /home/ali/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-task-0.3.31/src/arc_wake.rs /home/ali/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-task-0.3.31/src/waker.rs /home/ali/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-task-0.3.31/src/waker_ref.rs /home/ali/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-task-0.3.31/src/future_obj.rs /home/ali/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-task-0.3.31/src/noop_waker.rs
+
+/home/ali/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-task-0.3.31/src/lib.rs:
+/home/ali/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-task-0.3.31/src/spawn.rs:
+/home/ali/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-task-0.3.31/src/arc_wake.rs:
+/home/ali/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-task-0.3.31/src/waker.rs:
+/home/ali/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-task-0.3.31/src/waker_ref.rs:
+/home/ali/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-task-0.3.31/src/future_obj.rs:
+/home/ali/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-task-0.3.31/src/noop_waker.rs:

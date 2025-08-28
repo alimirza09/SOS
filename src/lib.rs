@@ -5,17 +5,18 @@
 #![test_runner(crate::test_runner)]
 #![reexport_test_harness_main = "test_main"]
 
+extern crate alloc;
 use core::panic::PanicInfo;
 
+pub mod allocator;
 pub mod gdt;
 pub mod interrupts;
 pub mod memory;
 pub mod serial;
-pub mod sshell;
+pub mod task;
 pub mod vga_buffer;
 
 pub fn init() {
-    crate::vga_buffer::init_vga_with_cursor();
     gdt::init();
     interrupts::init_idt();
     unsafe { interrupts::PICS.lock().initialize() };
@@ -74,13 +75,13 @@ pub fn hlt_loop() -> ! {
 }
 
 #[cfg(test)]
-use bootloader::{entry_point, BootInfo};
+use bootloader::{BootInfo, entry_point};
 
 #[cfg(test)]
 entry_point!(test_kernel_main);
 
+/// Entry point for `cargo xtest`
 #[cfg(test)]
-#[unsafe(no_mangle)]
 fn test_kernel_main(_boot_info: &'static BootInfo) -> ! {
     init();
     test_main();
