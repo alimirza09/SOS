@@ -34,7 +34,6 @@ impl Executor {
     }
 
     fn run_ready_tasks(&mut self) {
-        // destructure `self` to avoid borrow checker errors
         let Self {
             tasks,
             task_queue,
@@ -44,7 +43,7 @@ impl Executor {
         while let Some(task_id) = task_queue.pop() {
             let task = match tasks.get_mut(&task_id) {
                 Some(task) => task,
-                None => continue, // task no longer exists
+                None => continue,
             };
             let waker = waker_cache
                 .entry(task_id)
@@ -52,7 +51,6 @@ impl Executor {
             let mut context = Context::from_waker(waker);
             match task.poll(&mut context) {
                 Poll::Ready(()) => {
-                    // task done -> remove it and its cached waker
                     tasks.remove(&task_id);
                     waker_cache.remove(&task_id);
                 }
