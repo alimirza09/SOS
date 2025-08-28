@@ -1,7 +1,0 @@
-cargo:rerun-if-changed=/home/ali/Projects/blog_os/Cargo.toml
-cargo:rustc-link-search=native=/home/ali/Projects/blog_os/target/bootimage/bootloader/x86_64-bootloader/release/build/bootloader-2564a4316ea616fa/out
-cargo:rustc-link-lib=static=kernel_bin-sos
-cargo:rerun-if-env-changed=KERNEL
-cargo:rerun-if-env-changed=KERNEL_MANIFEST
-cargo:rerun-if-changed=/home/ali/Projects/blog_os/target/x86_64-sos/debug/sos
-cargo:rerun-if-changed=build.rs
