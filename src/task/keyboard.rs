@@ -1,4 +1,5 @@
 use crate::{print, println};
+use alloc::{collections::VecDeque, string::String};
 use conquer_once::spin::OnceCell;
 use core::{
     pin::Pin,
@@ -10,13 +11,12 @@ use futures_util::{
     task::AtomicWaker,
 };
 use pc_keyboard::{DecodedKey, HandleControl, Keyboard, ScancodeSet1, layouts};
+use spin::Mutex;
 
-static SCANCODE_QUEUE: OnceCell<ArrayQueue<u8>> = OnceCell::uninit();
+pub static SCANCODE_QUEUE: OnceCell<ArrayQueue<u8>> = OnceCell::uninit();
+pub static KEYBUFFER: Mutex<VecDeque<char>> = Mutex::new(VecDeque::new());
 static WAKER: AtomicWaker = AtomicWaker::new();
 
-/// Called by the keyboard interrupt handler
-///
-/// Must not block or allocate.
 pub(crate) fn add_scancode(scancode: u8) {
     if let Ok(queue) = SCANCODE_QUEUE.try_get() {
         if let Err(_) = queue.push(scancode) {
@@ -29,6 +29,26 @@ pub(crate) fn add_scancode(scancode: u8) {
     }
 }
 
+// TODO: give up control
+pub async fn read_line() {
+    let mut scancodes = ScancodeStream::new();
+    let mut keyboard = Keyboard::new(
+        ScancodeSet1::new(),
+        layouts::Us104Key,
+        HandleControl::Ignore,
+    );
+
+    while let Some(scandcode) = scancodes.next().await {
+        if let Ok(Some(key_event)) = keyboard.add_byte(scandcode) {
+            if let Some(key) = keyboard.process_keyevent(key_event) {
+                match key {
+                    DecodedKey::Unicode(character) => KEYBUFFER.lock().push_back(character),
+                    DecodedKey::RawKey(_) => (),
+                }
+            }
+        }
+    }
+}
 pub struct ScancodeStream {
     _private: (),
 }
@@ -50,7 +70,6 @@ impl Stream for ScancodeStream {
             .try_get()
             .expect("scancode queue not initialized");
 
-        // fast path
         if let Some(scancode) = queue.pop() {
             return Poll::Ready(Some(scancode));
         }
@@ -83,5 +102,14 @@ pub async fn print_keypresses() {
                 }
             }
         }
+    }
+}
+
+pub fn wait_for_keypress() -> char {
+    loop {
+        if let Some(c) = KEYBUFFER.lock().pop_front() {
+            return c;
+        }
+        x86_64::instructions::hlt();
     }
 }
