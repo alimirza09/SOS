@@ -6,13 +6,14 @@ extern crate alloc;
 use bootloader::{BootInfo, entry_point};
 use core::panic::PanicInfo;
 use sos::println;
-use sos::task::{Task, executor::Executor, keyboard};
+use sos::task::{Task, executor::Executor};
 
 entry_point!(kernel_main);
 
 fn kernel_main(boot_info: &'static BootInfo) -> ! {
     use sos::allocator;
     use sos::memory::{self, BootInfoFrameAllocator};
+    use sos::sshell::shell;
     use sos::vga_buffer::{Color, set_colors};
     use x86_64::VirtAddr;
     set_colors(Color::Green, Color::Black);
@@ -26,9 +27,8 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 
     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("heap initialization failed");
 
-    let mut c = &mut [];
     let mut executor = Executor::new();
-    executor.spawn(Task::new(sos::sshell::shell(c)));
+    executor.spawn(Task::new(shell()));
     executor.run();
 }
 

@@ -1,5 +1,4 @@
 use crate::{print, println};
-use alloc::{collections::VecDeque, string::String};
 use conquer_once::spin::OnceCell;
 use core::{
     pin::Pin,
@@ -10,12 +9,76 @@ use futures_util::{
     stream::{Stream, StreamExt},
     task::AtomicWaker,
 };
+use lazy_static::lazy_static;
 use pc_keyboard::{DecodedKey, HandleControl, Keyboard, ScancodeSet1, layouts};
 use spin::Mutex;
 
 pub static SCANCODE_QUEUE: OnceCell<ArrayQueue<u8>> = OnceCell::uninit();
-pub static KEYBUFFER: Mutex<VecDeque<char>> = Mutex::new(VecDeque::new());
 static WAKER: AtomicWaker = AtomicWaker::new();
+const KEYBUFFER_SIZE: usize = 1024; // buffer can hold 128 chars
+lazy_static! {
+    pub static ref SCANCODES: ScancodeStream = ScancodeStream::new();
+}
+
+pub struct RingBuffer {
+    buffer: [Option<char>; KEYBUFFER_SIZE],
+    head: usize,
+    tail: usize,
+}
+
+impl RingBuffer {
+    pub const fn new() -> Self {
+        Self {
+            buffer: [None; KEYBUFFER_SIZE],
+            head: 0,
+            tail: 0,
+        }
+    }
+
+    pub fn push(&mut self, c: char) {
+        let next = (self.head + 1) % KEYBUFFER_SIZE;
+        if next != self.tail {
+            self.buffer[self.head] = Some(c);
+            self.head = next;
+        }
+        // TODO: else
+    }
+
+    pub fn pop(&mut self) -> Option<char> {
+        if self.head == self.tail {
+            None // empty
+        } else {
+            let c = self.buffer[self.tail];
+            self.buffer[self.tail] = None;
+            self.tail = (self.tail + 1) % KEYBUFFER_SIZE;
+            c
+        }
+    }
+}
+lazy_static! {
+    pub static ref KEYBUFFER: Mutex<RingBuffer> = Mutex::new(RingBuffer::new());
+}
+
+use core::future::Future;
+
+pub struct KeyFuture;
+
+impl Future for KeyFuture {
+    type Output = char;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if let Some(c) = KEYBUFFER.lock().pop() {
+            Poll::Ready(c)
+        } else {
+            WAKER.register(cx.waker());
+            Poll::Pending
+        }
+    }
+}
+
+// pub async fn wait_for_keypress_async() -> char {
+//     KeyFuture.await
+// }
 
 pub(crate) fn add_scancode(scancode: u8) {
     if let Ok(queue) = SCANCODE_QUEUE.try_get() {
@@ -29,26 +92,30 @@ pub(crate) fn add_scancode(scancode: u8) {
     }
 }
 
-// TODO: give up control
-pub async fn read_line() {
-    let mut scancodes = ScancodeStream::new();
+pub async fn read_line() -> Option<char> {
+    let mut scancodes = SCANCODES.clone();
     let mut keyboard = Keyboard::new(
         ScancodeSet1::new(),
         layouts::Us104Key,
         HandleControl::Ignore,
     );
 
-    while let Some(scandcode) = scancodes.next().await {
-        if let Ok(Some(key_event)) = keyboard.add_byte(scandcode) {
+    while let Some(scancode) = scancodes.next().await {
+        if let Ok(Some(key_event)) = keyboard.add_byte(scancode) {
             if let Some(key) = keyboard.process_keyevent(key_event) {
                 match key {
-                    DecodedKey::Unicode(character) => KEYBUFFER.lock().push_back(character),
+                    DecodedKey::Unicode(character) => {
+                        KEYBUFFER.lock().push(character);
+                        return Some(character);
+                    }
                     DecodedKey::RawKey(_) => (),
                 }
             }
         }
     }
+    None
 }
+#[derive(Debug, Clone, Copy)]
 pub struct ScancodeStream {
     _private: (),
 }
@@ -56,7 +123,7 @@ pub struct ScancodeStream {
 impl ScancodeStream {
     pub fn new() -> Self {
         SCANCODE_QUEUE
-            .try_init_once(|| ArrayQueue::new(100))
+            .try_init_once(|| ArrayQueue::new(1024))
             .expect("ScancodeStream::new should only be called once");
         ScancodeStream { _private: () }
     }
@@ -107,7 +174,7 @@ pub async fn print_keypresses() {
 
 pub fn wait_for_keypress() -> char {
     loop {
-        if let Some(c) = KEYBUFFER.lock().pop_front() {
+        if let Some(c) = KEYBUFFER.lock().pop() {
             return c;
         }
         x86_64::instructions::hlt();

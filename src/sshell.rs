@@ -1,13 +1,12 @@
-use crate::task::keyboard::{read_line, wait_for_keypress};
+use crate::task::keyboard::read_line;
 use crate::{print, println};
 
-pub async fn shell(buf: &mut [u8]) {
-    println!("whahahhahaha");
+pub async fn shell() {
+    let mut buf = [0u8; 1024];
 
-    read_line().await;
     let mut i = 0;
     loop {
-        let c = wait_for_keypress();
+        let c = read_line().await.unwrap();
         match c {
             '\n' | '\r' => {
                 println!();
