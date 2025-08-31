@@ -6,11 +6,14 @@ extern crate alloc;
 
 pub mod allocator;
 pub mod gdt;
+pub mod interrupt;
 pub mod interrupts;
 pub mod memory;
+pub mod processor;
 pub mod rr;
 pub mod serial;
 pub mod sshell;
+pub mod std_thread;
 pub mod task;
 pub mod thread_pool;
 pub mod timer;

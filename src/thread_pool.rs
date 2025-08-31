@@ -60,7 +60,7 @@ impl ThreadPool {
         }
     }
 
-    fn alloc_tid(&self) -> (Tid, MutexGuard<Option<Thread>>) {
+    fn alloc_tid(&self) -> (Tid, MutexGuard<'_, Option<Thread>>) {
         for (i, proc) in self.threads.iter().enumerate() {
             let thread = proc.lock();
             if thread.is_none() {
@@ -116,7 +116,7 @@ impl ThreadPool {
     pub(crate) fn run(&self, cpu_id: usize) -> Option<(Tid, Box<dyn Context>)> {
         self.scheduler.pop(cpu_id).map(|tid| {
             let mut proc_lock = self.threads[tid].lock();
-            let mut proc = proc_lock.as_mut().expect("thread not exist");
+            let proc = proc_lock.as_mut().expect("thread not exist");
             proc.status = Status::Running(cpu_id);
             (tid, proc.context.take().expect("context not exist"))
         })
@@ -151,7 +151,7 @@ impl ThreadPool {
     /// Insert/Remove it to/from scheduler if necessary.
     fn set_status(&self, tid: Tid, status: Status) {
         let mut proc_lock = self.threads[tid].lock();
-        if let Some(mut proc) = proc_lock.as_mut() {
+        if let Some(proc) = proc_lock.as_mut() {
             trace!("thread {} {:?} -> {:?}", tid, proc.status, status);
             match (&proc.status, &status) {
                 (Status::Ready, Status::Ready) => return,
@@ -207,7 +207,7 @@ impl ThreadPool {
     /// Cancel sleeping after stop
     pub fn cancel_sleeping(&self, tid: Tid) {
         let mut proc_lock = self.threads[tid].lock();
-        if let Some(mut proc) = proc_lock.as_mut() {
+        if let Some(proc) = proc_lock.as_mut() {
             if let Status::Sleeping = proc.status_after_stop {
                 proc.status_after_stop = Status::Ready;
             }
@@ -216,7 +216,7 @@ impl ThreadPool {
 
     pub fn wakeup(&self, tid: Tid) {
         let mut proc_lock = self.threads[tid].lock();
-        if let Some(mut proc) = proc_lock.as_mut() {
+        if let Some(proc) = proc_lock.as_mut() {
             trace!("thread {} {:?} -> {:?}", tid, proc.status, Status::Ready);
             if let Status::Sleeping = proc.status {
                 proc.status = Status::Ready;
