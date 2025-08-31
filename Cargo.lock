@@ -115,6 +115,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "log"
+version = "0.4.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13dc2df351e3202783a1fe0d44375f7295ffb4049267b0f3018346dc122a1d94"
+
+[[package]]
 name = "pc-keyboard"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -163,6 +169,7 @@ dependencies = [
  "futures-util",
  "lazy_static",
  "linked_list_allocator",
+ "log",
  "pc-keyboard",
  "pic8259",
  "spin 0.5.2",

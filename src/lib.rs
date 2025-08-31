@@ -8,9 +8,12 @@ pub mod allocator;
 pub mod gdt;
 pub mod interrupts;
 pub mod memory;
+pub mod rr;
 pub mod serial;
 pub mod sshell;
 pub mod task;
+pub mod thread_pool;
+pub mod timer;
 pub mod vga_buffer;
 
 pub fn init() {
