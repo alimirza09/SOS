@@ -5,10 +5,12 @@
 extern crate alloc;
 
 pub mod allocator;
+pub mod context;
 pub mod gdt;
 pub mod interrupt;
 pub mod interrupts;
 pub mod memory;
+pub mod new;
 pub mod processor;
 pub mod rr;
 pub mod serial;
