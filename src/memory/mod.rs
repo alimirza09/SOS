@@ -1,6 +1,5 @@
 pub mod allocator;
-pub mod memory;
+pub mod paging;
 
-// Re-exports
 pub use allocator::*;
-pub use memory::*;
+pub use paging::*;

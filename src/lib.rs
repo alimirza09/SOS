@@ -13,11 +13,9 @@ pub mod task;
 
 pub use arch::x86_64::{gdt, interrupts, smp, timer};
 pub use drivers::{serial, sshell, vga_buffer};
-pub use memory::{allocator, memory};
+pub use memory::{allocator, paging};
 pub use sched::{context, processor, rr, std_thread, thread_pool};
 pub use sync::interrupt;
-
-pub use smp as new; // So existing `use sos::new::*` still works
 
 pub fn init() {
     arch::x86_64::gdt::init();
