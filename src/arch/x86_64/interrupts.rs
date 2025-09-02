@@ -75,6 +75,18 @@ extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFr
     unsafe {
         PICS.lock()
             .notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
+        let cpu_id = crate::arch::x86_64::smp::get_cpu_id();
+        unsafe extern "Rust" {
+            static mut PROCESSORS:
+                [crate::sched::processor::Processor; crate::arch::x86_64::smp::MAX_CPUS];
+        }
+        let processor = &mut PROCESSORS[cpu_id];
+        let tid = processor.inner().thread.as_ref().map(|(tid, _)| *tid);
+        let need_reschedule = processor.manager().tick(cpu_id, tid);
+        if need_reschedule {
+            processor.stop_running();
+            processor.run_next(cpu_id);
+        }
     }
 }
 

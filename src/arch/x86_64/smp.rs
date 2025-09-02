@@ -221,3 +221,14 @@ pub fn start_one_ap(
         send_init_sipi(apic_id as u8, TRAMPOLINE_VECTOR);
     }
 }
+pub fn get_cpu_id() -> usize {
+    let cpu_id: usize;
+    unsafe {
+        core::arch::asm!(
+            "mov {}, gs:0",
+            out(reg) cpu_id,
+            options(nomem, preserves_flags)
+        );
+    }
+    cpu_id
+}

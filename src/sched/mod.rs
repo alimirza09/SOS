@@ -4,7 +4,6 @@ pub mod rr;
 pub mod std_thread;
 pub mod thread_pool;
 
-// Re-exports
 pub use context::*;
 pub use processor::*;
 pub use rr::*;
