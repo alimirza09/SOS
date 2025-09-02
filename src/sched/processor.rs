@@ -8,11 +8,11 @@ pub struct Processor {
     inner: UnsafeCell<Option<ProcessorInner>>,
 }
 
-struct ProcessorInner {
+pub struct ProcessorInner {
     /// Processor ID
     id: usize,
     /// Current running thread
-    thread: Option<(Tid, Box<dyn Context>)>,
+    pub thread: Option<(Tid, Box<dyn Context>)>,
     /// The context of
     loop_context: Box<dyn Context>,
     /// Reference to `ThreadPool`
@@ -34,7 +34,7 @@ impl Processor {
             });
         }
     }
-    fn inner(&self) -> &mut ProcessorInner {
+    pub fn inner(&self) -> &mut ProcessorInner {
         unsafe { &mut *self.inner.get() }
             .as_mut()
             .expect("Processor is not initialized")
