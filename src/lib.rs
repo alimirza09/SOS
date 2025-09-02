@@ -4,27 +4,25 @@
 
 extern crate alloc;
 
-pub mod allocator;
-pub mod context;
-pub mod gdt;
-pub mod interrupt;
-pub mod interrupts;
+pub mod arch;
+pub mod drivers;
 pub mod memory;
-pub mod new;
-pub mod processor;
-pub mod rr;
-pub mod serial;
-pub mod sshell;
-pub mod std_thread;
+pub mod sched;
+pub mod sync;
 pub mod task;
-pub mod thread_pool;
-pub mod timer;
-pub mod vga_buffer;
+
+pub use arch::x86_64::{gdt, interrupts, smp, timer};
+pub use drivers::{serial, sshell, vga_buffer};
+pub use memory::{allocator, memory};
+pub use sched::{context, processor, rr, std_thread, thread_pool};
+pub use sync::interrupt;
+
+pub use smp as new; // So existing `use sos::new::*` still works
 
 pub fn init() {
-    gdt::init();
-    interrupts::init_idt();
-    unsafe { interrupts::PICS.lock().initialize() };
+    arch::x86_64::gdt::init();
+    arch::x86_64::interrupts::init_idt();
+    unsafe { arch::x86_64::interrupts::PICS.lock().initialize() };
     x86_64::instructions::interrupts::enable();
 }
 
