@@ -1,11 +1,3 @@
-//! `std::thread`-like interface
-//!
-//! Based on Processor. Used in kernel.
-//!
-//! You need to implement the following functions before use:
-//! - `processor`: Get a reference of the current `Processor`
-//! - `new_kernel_context`: Construct a `Context` of the new kernel thread
-
 use crate::interrupt::no_interrupt;
 use crate::processor::*;
 use crate::thread_pool::*;
@@ -15,27 +7,23 @@ use core::time::Duration;
 use log::*;
 
 #[unsafe(no_mangle)]
-/// Get a reference of the current `Processor`
 fn processor() -> &'static Processor {
     #[cfg(not(target_os = "uefi"))]
     unimplemented!("thread: Please implement and export `processor`")
 }
 
 #[unsafe(no_mangle)]
-/// Construct a `Context` of the new kernel thread
 fn new_kernel_context(_entry: extern "C" fn(usize) -> !, _arg: usize) -> Box<dyn Context> {
     #[cfg(not(target_os = "uefi"))]
     unimplemented!("thread: Please implement and export `new_kernel_context`")
 }
 
-/// Gets a handle to the thread that invokes it.
 pub fn current() -> Thread {
     Thread {
         tid: processor().tid(),
     }
 }
 
-/// Puts the current thread to sleep for the specified amount of time.
 pub fn sleep(dur: Duration) {
     let time = dur_to_ticks(dur);
     trace!("sleep: {:?} ticks", time);
@@ -47,10 +35,6 @@ pub fn sleep(dur: Duration) {
     }
 }
 
-/// Spawns a new thread, returning a JoinHandle for it.
-///
-/// `F`: Type of the function `f`
-/// `T`: Type of the return value of `f`
 pub fn spawn<F, T>(f: F) -> JoinHandle<T>
 where
     F: Send + 'static + FnOnce() -> T,
@@ -82,7 +66,6 @@ where
     };
 }
 
-/// Cooperatively gives up a time slice to the OS scheduler.
 pub fn yield_now() {
     trace!("yield:");
     no_interrupt(|| {
@@ -90,15 +73,12 @@ pub fn yield_now() {
     });
 }
 
-/// Blocks unless or until the current thread's token is made available.
 pub fn park() {
     trace!("park:");
     processor().manager().sleep(current().id(), 0);
     yield_now();
 }
 
-/// Blocks unless or until the current thread's token is made available.
-/// Calls `f` before thread yields. Can be used to avoid racing.
 pub fn park_action(f: impl FnOnce()) {
     trace!("park:");
     processor().manager().sleep(current().id(), 0);
@@ -106,41 +86,33 @@ pub fn park_action(f: impl FnOnce()) {
     yield_now();
 }
 
-/// A handle to a thread.
 pub struct Thread {
     tid: usize,
 }
 
 impl Thread {
-    /// Atomically makes the handle's token available if it is not already.
     pub fn unpark(&self) {
         processor().manager().wakeup(self.tid);
     }
-    /// Gets the thread's unique identifier.
     pub fn id(&self) -> usize {
         self.tid
     }
 }
 
-/// An owned permission to join on a thread (block on its termination).
 pub struct JoinHandle<T> {
     thread: Thread,
     mark: PhantomData<T>,
 }
 
 impl<T> JoinHandle<T> {
-    /// Extracts a handle to the underlying thread.
     pub fn thread(&self) -> &Thread {
         &self.thread
     }
-    /// Waits for the associated thread to finish.
     pub fn join(self) -> Result<T, ()> {
         loop {
             trace!("try to join thread {}", self.thread.tid);
             if let Some(exit_code) = processor().manager().try_remove(self.thread.tid) {
-                // Do not call drop function
                 core::mem::forget(self);
-                // Find return value on the heap from the exit code.
                 return Ok(unsafe { *Box::from_raw(exit_code as *mut T) });
             }
             processor().manager().wait(current().id(), self.thread.tid);

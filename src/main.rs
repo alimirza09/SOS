@@ -25,6 +25,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     sos::init();
 
     use sos::memory::{allocator, paging, paging::BootInfoFrameAllocator};
+    use sos::smp::nop;
     use x86_64::VirtAddr;
 
     let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset);
@@ -47,40 +48,21 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     start_one_ap(1, 1, pool.clone(), processors_ptr);
     println!("Started AP #1");
 
-    for _ in 0..1000000 {
-        unsafe {
-            core::arch::asm!("nop");
-        }
-    }
+    nop(1_000_000);
 
     start_one_ap(2, 2, pool.clone(), processors_ptr);
     println!("Started AP #2");
-
-    for _ in 0..1000000 {
-        unsafe {
-            core::arch::asm!("nop");
-        }
-    }
+    nop(1_000_000);
 
     start_one_ap(3, 3, pool.clone(), processors_ptr);
     println!("Started AP #3");
-
-    for _ in 0..1000000 {
-        unsafe {
-            core::arch::asm!("nop");
-        }
-    }
+    nop(1_000_000);
 
     start_one_ap(4, 4, pool.clone(), processors_ptr);
     println!("Started AP #4");
 
     println!("All APs started! Running on {} total CPUs", 5);
-
-    for _ in 0..5000000 {
-        unsafe {
-            core::arch::asm!("nop");
-        }
-    }
+    nop(5_000_000);
 
     for i in 0..5 {
         let cpu = CPUS.get(i);
@@ -108,11 +90,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
         println!("BSP main task running!");
         for i in 0..5 {
             println!("BSP main iteration {}", i);
-            for _ in 0..1000000 {
-                unsafe {
-                    core::arch::asm!("nop");
-                }
-            }
+            nop(1_000_000);
         }
     }));
 

@@ -25,10 +25,7 @@ global_asm!(
     .text
     .global ctx_switch
     .type ctx_switch, @function
-// ctx_switch(old: *mut RawContext, new: *const RawContext)
-// rdi = old, rsi = new
 ctx_switch:
-    // Save callee-saved registers into *rdi (old)
     mov [rdi + 0], r15
     mov [rdi + 8], r14
     mov [rdi + 16], r13
@@ -37,7 +34,6 @@ ctx_switch:
     mov [rdi + 40], rbp
     mov [rdi + 48], rsp
 
-    // Load callee-saved registers from *rsi (new)
     mov r15, [rsi + 0]
     mov r14, [rsi + 8]
     mov r13, [rsi + 16]
@@ -46,7 +42,6 @@ ctx_switch:
     mov rbp, [rsi + 40]
     mov rsp, [rsi + 48]
 
-    // Return; execution continues with registers/state of `new`
     ret
 "#
 );

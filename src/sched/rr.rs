@@ -7,7 +7,6 @@ use spin::Mutex;
 
 type Tid = usize;
 
-/// The scheduler for a ThreadPool
 pub trait Scheduler: 'static {
     /// Push a thread to the back of ready queue.
     fn push(&self, tid: Tid);
