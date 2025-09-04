@@ -59,27 +59,6 @@ lazy_static! {
     pub static ref KEYBUFFER: Mutex<RingBuffer> = Mutex::new(RingBuffer::new());
 }
 
-use core::future::Future;
-
-pub struct KeyFuture;
-
-impl Future for KeyFuture {
-    type Output = char;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if let Some(c) = KEYBUFFER.lock().pop() {
-            Poll::Ready(c)
-        } else {
-            WAKER.register(cx.waker());
-            Poll::Pending
-        }
-    }
-}
-
-// pub async fn wait_for_keypress_async() -> char {
-//     KeyFuture.await
-// }
-
 pub(crate) fn add_scancode(scancode: u8) {
     if let Ok(queue) = SCANCODE_QUEUE.try_get() {
         if let Err(_) = queue.push(scancode) {
