@@ -25,7 +25,6 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     sos::init();
 
     use sos::memory::{allocator, paging, paging::BootInfoFrameAllocator};
-    use sos::smp::nop;
     use x86_64::VirtAddr;
 
     let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset);
@@ -33,6 +32,16 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     let mut mapper = unsafe { paging::init(phys_mem_offset, &mut frame_allocator) };
     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("Heap initialization failed");
 
+    processors();
+}
+
+#[panic_handler]
+fn panic(info: &PanicInfo) -> ! {
+    println!("{}", info);
+    sos::hlt_loop();
+}
+fn processors() -> ! {
+    use sos::smp::nop;
     CPUS.init();
     println!("CPUs initialized");
 
@@ -95,10 +104,4 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     }));
 
     executor.run();
-}
-
-#[panic_handler]
-fn panic(info: &PanicInfo) -> ! {
-    println!("{}", info);
-    sos::hlt_loop();
 }
