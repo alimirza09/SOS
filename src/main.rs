@@ -32,6 +32,13 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     let mut mapper = unsafe { paging::init(phys_mem_offset, &mut frame_allocator) };
     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("Heap initialization failed");
 
+    // Initialize ATA driver
+    println!("Initializing ATA driver...");
+    sos::ata::init_ata();
+
+    // Test the ATA driver
+    sos::ata::test_ata();
+
     processors();
 }
 
@@ -40,6 +47,7 @@ fn panic(info: &PanicInfo) -> ! {
     println!("{}", info);
     sos::hlt_loop();
 }
+
 fn processors() -> ! {
     use sos::smp::nop;
     CPUS.init();
@@ -83,6 +91,41 @@ fn processors() -> ! {
     }
 
     let mut executor = Executor::new();
+
+    // Add ATA shell task
+    executor.spawn(Task::new(async {
+        // Wait a bit for system to stabilize
+        for _ in 0..1000000 {
+            core::hint::spin_loop();
+        }
+
+        println!("Starting ATA shell...");
+        sos::drivers::run_ata_shell().await;
+    }));
+
+    // Add a task to demonstrate ATA usage
+    executor.spawn(Task::new(async move {
+        println!("ATA demo task starting...");
+
+        // Try to read device information
+        if let Some((sectors, model)) = sos::ata::get_device_info(0) {
+            println!("First ATA device: {} with {} sectors", model, sectors);
+
+            // Try to read the first sector
+            let mut buffer = [0u8; 512];
+            match sos::ata::read_sector(0, 0, &mut buffer) {
+                Ok(()) => {
+                    println!("Successfully read first sector:");
+                    for i in 0..16 {
+                        println!("  {:02X}", buffer[i]);
+                    }
+                }
+                Err(e) => println!("Failed to read first sector: {:?}", e),
+            }
+        } else {
+            println!("No ATA devices available");
+        }
+    }));
 
     for task_id in 0..10 {
         executor.spawn(Task::new(async move {
