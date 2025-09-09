@@ -4,17 +4,18 @@
 extern crate alloc;
 
 use alloc::sync::Arc;
-use bootloader::{BootInfo, entry_point};
+use bootloader::{entry_point, BootInfo};
 use core::panic::PanicInfo;
+use sos::drivers::test_ata_driver;
 
 use core::ptr::addr_of_mut;
-use sos::arch::x86_64::smp::{CPUS, MAX_CPUS, start_one_ap};
-use sos::drivers::vga_buffer::{Color, set_colors};
+use sos::arch::x86_64::smp::{start_one_ap, CPUS, MAX_CPUS};
+use sos::drivers::vga_buffer::{set_colors, Color};
 use sos::println;
 use sos::sched::processor::Processor;
 use sos::sched::rr::RRScheduler;
 use sos::sched::thread_pool::ThreadPool;
-use sos::task::{Task, executor::Executor};
+use sos::task::{executor::Executor, Task};
 
 entry_point!(kernel_main);
 
@@ -31,6 +32,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     let mut frame_allocator = unsafe { BootInfoFrameAllocator::init(&boot_info.memory_map) };
     let mut mapper = unsafe { paging::init(phys_mem_offset, &mut frame_allocator) };
     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("Heap initialization failed");
+    test_ata_driver();
 
     processors();
 }
