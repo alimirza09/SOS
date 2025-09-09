@@ -18,15 +18,23 @@ pub use memory::{allocator, paging};
 pub use sched::{context, processor, rr, std_thread, thread_pool};
 pub use sync::interrupt;
 
-pub fn init() {
-    arch::x86_64::gdt::init();
-    arch::x86_64::interrupts::init_idt();
-    unsafe { arch::x86_64::interrupts::PICS.lock().initialize() };
-    x86_64::instructions::interrupts::enable();
-}
-
 pub fn hlt_loop() -> ! {
     loop {
         x86_64::instructions::hlt();
     }
+}
+pub fn init() {
+    println!("Initializing GDT...");
+    arch::x86_64::gdt::init();
+
+    println!("Initializing IDT...");
+    arch::x86_64::interrupts::init_idt();
+
+    println!("Initializing PICs...");
+    unsafe { arch::x86_64::interrupts::PICS.lock().initialize() };
+
+    println!("Enabling interrupts...");
+    x86_64::instructions::interrupts::enable();
+
+    println!("System initialization complete");
 }

@@ -12,6 +12,8 @@ pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
 pub enum InterruptIndex {
     Timer = PIC_1_OFFSET,
     Keyboard,
+    AtaPrimary = PIC_1_OFFSET + 14,
+    AtaSecondary = PIC_1_OFFSET + 15,
 }
 
 impl InterruptIndex {
@@ -39,6 +41,11 @@ lazy_static! {
         }
         idt[InterruptIndex::Timer.as_usize()].set_handler_fn(timer_interrupt_handler);
         idt[InterruptIndex::Keyboard.as_usize()].set_handler_fn(keyboard_interrupt_handler);
+
+        idt[InterruptIndex::AtaPrimary.as_usize()].set_handler_fn(ata_primary_interrupt_handler);
+        idt[InterruptIndex::AtaSecondary.as_usize()]
+            .set_handler_fn(ata_secondary_interrupt_handler);
+
         idt
     };
 }
@@ -90,5 +97,32 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
         crate::interrupts::PICS
             .lock()
             .notify_end_of_interrupt(crate::interrupts::InterruptIndex::Keyboard.as_u8());
+    }
+}
+
+extern "x86-interrupt" fn ata_primary_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    use crate::drivers::ata::PRIMARY_ATA;
+    unsafe {
+        let status = PRIMARY_ATA.status_port.read();
+        crate::serial_println!("ATA Primary interrupt: status 0x{:02X}", status);
+    }
+
+    unsafe {
+        PICS.lock()
+            .notify_end_of_interrupt(InterruptIndex::AtaPrimary.as_u8());
+    }
+}
+
+extern "x86-interrupt" fn ata_secondary_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    // Read status to clear interrupt
+    use crate::drivers::ata::SECONDARY_ATA;
+    unsafe {
+        let status = SECONDARY_ATA.status_port.read();
+        crate::serial_println!("ATA Secondary interrupt: status 0x{:02X}", status);
+    }
+
+    unsafe {
+        PICS.lock()
+            .notify_end_of_interrupt(InterruptIndex::AtaSecondary.as_u8());
     }
 }
