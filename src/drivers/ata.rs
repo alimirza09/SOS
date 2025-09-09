@@ -109,7 +109,6 @@ impl AtaController {
     pub fn identify(&mut self, device: AtaDevice) -> Result<[u16; 256], AtaError> {
         crate::serial_println!("ATA: Starting IDENTIFY for device {:?}", device);
 
-        // Use polling mode for identify
         self.disable_interrupts();
 
         self.select_device(device)?;
@@ -123,7 +122,6 @@ impl AtaController {
             self.command_port.write(0xEC);
         }
 
-        // Wait for data ready
         for _ in 0..10000 {
             let status = unsafe { self.alt_status_port.read() };
 
@@ -161,7 +159,6 @@ impl AtaController {
             return Err(AtaError::Error(0));
         }
 
-        // Can use interrupts for read operations now
         self.enable_interrupts();
 
         self.select_device(device)?;
@@ -179,7 +176,6 @@ impl AtaController {
         }
 
         for sector in 0..count {
-            // Wait for data request
             for _ in 0..10000 {
                 let status = unsafe { self.alt_status_port.read() };
                 if (status & 0x08) != 0 {
@@ -203,7 +199,7 @@ impl AtaController {
     }
 }
 
-pub static mut PRIMARY_ATA: AtaController = AtaController::new(0x1F0);
+pub static mut PRIMARY_ATA: Mutex<AtaController> = AtaController::new(0x1F0);
 pub static mut SECONDARY_ATA: AtaController = AtaController::new(0x170);
 
 fn extract_string(data: &[u16; 256], start_word: usize, word_count: usize) -> String {
@@ -215,7 +211,7 @@ fn extract_string(data: &[u16; 256], start_word: usize, word_count: usize) -> St
         }
 
         let word = data[start_word + i];
-        // ATA strings are byte-swapped
+
         let bytes = [(word >> 8) as u8, (word & 0xFF) as u8];
 
         for &byte in &bytes {
@@ -246,7 +242,6 @@ impl DriveInfo {
         let serial = extract_string(data, 10, 10);
         let firmware = extract_string(data, 23, 4);
 
-        // Debug: print relevant identify data words
         crate::serial_println!(
             "ATA Debug: Word 60 = 0x{:04X}, Word 61 = 0x{:04X}",
             data[60],
@@ -264,13 +259,12 @@ impl DriveInfo {
             data[103]
         );
 
-        // Check if LBA is supported (bit 9 of word 49)
         let lba_supported = (data[49] & (1 << 9)) != 0;
         crate::serial_println!("ATA Debug: LBA supported: {}", lba_supported);
 
         if !lba_supported {
             crate::serial_println!("ATA Debug: Using CHS mode (legacy)");
-            // For CHS mode, calculate from cylinders * heads * sectors
+
             let cylinders = data[1] as u32;
             let heads = data[3] as u32;
             let sectors_per_track = data[6] as u32;
@@ -293,23 +287,19 @@ impl DriveInfo {
             };
         }
 
-        // LBA28 capacity (words 60-61)
         let lba28_sectors = ((data[61] as u32) << 16) | (data[60] as u32);
         crate::serial_println!("ATA Debug: LBA28 sectors: {}", lba28_sectors);
 
-        // Check for LBA48 support (bit 10 of word 83)
         let supports_lba48 = (data[83] & (1 << 10)) != 0;
         crate::serial_println!("ATA Debug: LBA48 supported: {}", supports_lba48);
 
         let sectors = if supports_lba48 {
-            // LBA48 capacity (words 100-103)
             let lba48_sectors = ((data[103] as u64) << 48)
                 | ((data[102] as u64) << 32)
                 | ((data[101] as u64) << 16)
                 | (data[100] as u64);
             crate::serial_println!("ATA Debug: LBA48 sectors: {}", lba48_sectors);
 
-            // Use LBA48 if it's larger than LBA28, otherwise use LBA28
             if lba48_sectors > lba28_sectors as u64 {
                 lba48_sectors
             } else {
@@ -352,7 +342,6 @@ impl DriveInfo {
 
 pub fn test_ata_driver() {
     crate::serial_println!("=== ATA DRIVER TEST START ===");
-    crate::println!("Testing ATA driver (see serial output for details)...");
 
     unsafe {
         crate::serial_println!("Checking Primary Master...");
@@ -386,7 +375,6 @@ pub fn test_ata_driver() {
                                 crate::println!("MBR signature: Invalid or missing");
                             }
 
-                            // Print first few bytes of sector
                             crate::serial_print!("First 16 bytes of sector 0: ");
                             for i in 0..16 {
                                 crate::serial_print!("{:02X} ", buffer[i]);
@@ -407,5 +395,4 @@ pub fn test_ata_driver() {
     }
 
     crate::serial_println!("=== ATA DRIVER TEST COMPLETE ===");
-    crate::println!("ATA driver test completed");
 }

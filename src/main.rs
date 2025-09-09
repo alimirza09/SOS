@@ -6,7 +6,6 @@ extern crate alloc;
 use alloc::sync::Arc;
 use bootloader::{entry_point, BootInfo};
 use core::panic::PanicInfo;
-use sos::drivers::test_ata_driver;
 
 use core::ptr::addr_of_mut;
 use sos::arch::x86_64::smp::{start_one_ap, CPUS, MAX_CPUS};
@@ -23,13 +22,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     set_colors(Color::Green, Color::Black);
     println!("Welcome to sOS!");
 
-    // Initialize basic system first
-    println!("Initializing basic system...");
     sos::init();
-    println!("Basic system initialized");
-
-    // Initialize memory management
-    println!("Initializing memory management...");
     use sos::memory::{allocator, paging, paging::BootInfoFrameAllocator};
     use x86_64::VirtAddr;
 
@@ -37,62 +30,14 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     let mut frame_allocator = unsafe { BootInfoFrameAllocator::init(&boot_info.memory_map) };
     let mut mapper = unsafe { paging::init(phys_mem_offset, &mut frame_allocator) };
     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("Heap initialization failed");
-    println!("Memory management initialized");
 
-    // Wait a bit for system to stabilize
-    println!("System stabilizing...");
-    for _ in 0..1000000 {
-        x86_64::instructions::nop();
-    }
-
-    // Test basic functionality first
-    println!("Testing basic I/O...");
-
-    // Test VGA output
-    println!("VGA test passed");
-
-    // Test serial output
-    sos::serial_println!("Serial test from kernel");
-    println!("Serial test passed");
-
-    // Now test ATA driver with better error handling
-    println!("About to test ATA driver...");
-
-    // Add a small delay and try to catch any early faults
     for _ in 0..100000 {
         x86_64::instructions::nop();
     }
 
     test_ata_driver_safe();
 
-    println!("ATA test completed, starting processors...");
     processors()
-}
-
-// Add this safer ATA test function
-fn test_ata_driver_safe() {
-    println!("Starting safe ATA test...");
-
-    // First, test if we can even access the ports without faulting
-    unsafe {
-        use x86_64::instructions::port::Port;
-
-        println!("Testing basic port access...");
-
-        // Try to read status port - this is the safest operation
-        let mut status_port = Port::<u8>::new(0x1F7);
-        let status = status_port.read();
-        println!("Primary ATA status port read: 0x{:02X}", status);
-
-        // Test secondary controller status too
-        let mut secondary_status_port = Port::<u8>::new(0x177);
-        let secondary_status = secondary_status_port.read();
-        println!("Secondary ATA status port read: 0x{:02X}", secondary_status);
-
-        // If we get here without crashing, we can access I/O ports
-        println!("I/O port access works, proceeding with full ATA test");
-        test_ata_driver();
-    }
 }
 
 #[panic_handler]
@@ -100,7 +45,6 @@ fn panic(info: &PanicInfo) -> ! {
     serial_println!("=== KERNEL PANIC ===");
     serial_println!("PANIC: {}", info);
 
-    // Try to print more detailed panic info
     if let Some(location) = info.location() {
         serial_println!(
             "Panic occurred in file '{}' at line {}",
@@ -109,11 +53,9 @@ fn panic(info: &PanicInfo) -> ! {
         );
     }
 
-    // message() returns PanicMessage directly, not Option
     let message = info.message();
     serial_println!("Panic message: {}", message);
 
-    // Print stack trace if possible
     serial_println!("System halted due to panic - entering infinite loop");
 
     sos::hlt_loop();
@@ -156,7 +98,6 @@ fn processors() -> ! {
     println!("All APs started! Running on {} total CPUs", 5);
     nop(5_000_000);
 
-    // Check which CPUs came online
     for i in 0..5 {
         let cpu = CPUS.get(i);
         if cpu.online.load(core::sync::atomic::Ordering::SeqCst) == 1 {
@@ -185,7 +126,7 @@ fn processors() -> ! {
         println!("BSP main task running!");
         for i in 0..5 {
             println!("BSP main iteration {}", i);
-            // Use nop instead of the missing function
+
             for _ in 0..1_000_000 {
                 x86_64::instructions::nop();
             }
@@ -195,4 +136,126 @@ fn processors() -> ! {
 
     println!("Starting executor...");
     executor.run();
+}
+
+use sos::drivers::ata::*;
+use sos::serial_print;
+
+fn test_ata_driver_safe() {
+    println!("Starting comprehensive ATA test...");
+
+    unsafe {
+        use x86_64::instructions::port::Port;
+
+        println!("Testing basic port access...");
+
+        let mut status_port = Port::<u8>::new(0x1F7);
+        let status = status_port.read();
+        println!("Primary ATA status port read: 0x{:02X}", status);
+
+        let mut secondary_status_port = Port::<u8>::new(0x177);
+        let secondary_status = secondary_status_port.read();
+        println!("Secondary ATA status port read: 0x{:02X}", secondary_status);
+
+        println!("I/O port access works, proceeding with comprehensive ATA test");
+        test_ata_driver_comprehensive();
+    }
+}
+
+pub fn test_ata_driver_comprehensive() {
+    crate::serial_println!("=== COMPREHENSIVE ATA DRIVER TEST START ===");
+
+    let devices_to_test = [
+        ("Primary Master", AtaDevice::Master, true),
+        ("Primary Slave", AtaDevice::Slave, true),
+        ("Secondary Master", AtaDevice::Master, false),
+        ("Secondary Slave", AtaDevice::Slave, false),
+    ];
+
+    let mut found_devices = 0;
+
+    for (name, device, use_primary) in devices_to_test.iter() {
+        crate::serial_println!("Checking {}...", name);
+
+        unsafe {
+            let controller = if *use_primary {
+                &mut PRIMARY_ATA
+            } else {
+                &mut SECONDARY_ATA
+            };
+
+            match controller.identify(*device) {
+                Ok(identify_data) => {
+                    found_devices += 1;
+                    let info = DriveInfo::from_identify_data(&identify_data);
+
+                    crate::serial_println!("{} found:", name);
+                    crate::serial_println!("  Model: {}", info.model);
+                    crate::serial_println!("  Serial: {}", info.serial);
+                    crate::serial_println!("  Firmware: {}", info.firmware);
+                    crate::serial_println!("  Sectors: {}", info.sectors);
+                    crate::serial_println!(
+                        "  Capacity: {} MB ({} GB)",
+                        info.capacity_mb(),
+                        info.capacity_gb()
+                    );
+                    crate::serial_println!("  LBA48 Support: {}", info.supports_lba48);
+                    crate::serial_println!("  Sector Size: {} bytes", info.sector_size);
+
+                    crate::println!("{}: {} - {} MB", name, info.model, info.capacity_mb());
+
+                    if info.sectors > 0 {
+                        test_read_sectors(name, controller, *device);
+                    }
+                }
+                Err(e) => {
+                    crate::serial_println!("{} error: {:?}", name, e);
+                }
+            }
+        }
+    }
+
+    crate::println!("Found {} ATA devices total", found_devices);
+    crate::serial_println!("=== COMPREHENSIVE ATA DRIVER TEST COMPLETE ===");
+}
+
+fn test_read_sectors(name: &str, controller: &mut AtaController, device: AtaDevice) {
+    let mut buffer = [0u8; 512];
+
+    match { controller.read_sectors(device, 0, 1, &mut buffer) } {
+        Ok(()) => {
+            serial_println!("Successfully read sector 0 from {}", name);
+
+            if buffer[510] == 0x55 && buffer[511] == 0xAA {
+                serial_println!("Valid MBR signature found");
+                println!("{} MBR: Valid", name);
+            } else {
+                println!("{} MBR: Invalid or missing", name);
+            }
+
+            serial_print!("First 32 bytes of sector 0: ");
+            for i in 0..32 {
+                if i % 16 == 0 {
+                    serial_println!();
+                    serial_print!("{:04X}: ", i);
+                }
+                serial_print!("{:02X} ", buffer[i]);
+            }
+            serial_println!();
+
+            serial_print!("As ASCII: ");
+            for i in 0..32 {
+                let c = buffer[i];
+                if c >= 0x20 && c <= 0x7E {
+                    serial_print!("{}", c as char);
+                } else {
+                    serial_print!(".");
+                }
+            }
+            serial_println!();
+        }
+        Err(e) => {
+            serial_println!("Error reading sector from {}: {:?}", name, e);
+        }
+    }
 }
