@@ -1,4 +1,5 @@
 use alloc::string::{String, ToString};
+use spin::Mutex;
 use x86_64::instructions::port::{Port, PortReadOnly, PortWriteOnly};
 
 #[derive(Debug, Clone, Copy)]
@@ -199,8 +200,8 @@ impl AtaController {
     }
 }
 
-pub static mut PRIMARY_ATA: Mutex<AtaController> = AtaController::new(0x1F0);
-pub static mut SECONDARY_ATA: AtaController = AtaController::new(0x170);
+pub static mut PRIMARY_ATA: Mutex<AtaController> = Mutex::new(AtaController::new(0x1F0));
+pub static mut SECONDARY_ATA: Mutex<AtaController> = Mutex::new(AtaController::new(0x170));
 
 fn extract_string(data: &[u16; 256], start_word: usize, word_count: usize) -> String {
     let mut result = String::new();
@@ -345,7 +346,7 @@ pub fn test_ata_driver() {
 
     unsafe {
         crate::serial_println!("Checking Primary Master...");
-        match PRIMARY_ATA.identify(AtaDevice::Master) {
+        match PRIMARY_ATA.lock().identify(AtaDevice::Master) {
             Ok(identify_data) => {
                 let info = DriveInfo::from_identify_data(&identify_data);
                 crate::serial_println!("Primary Master found:");
@@ -365,7 +366,10 @@ pub fn test_ata_driver() {
 
                 if info.sectors > 0 {
                     let mut buffer = [0u8; 512];
-                    match PRIMARY_ATA.read_sectors(AtaDevice::Master, 0, 1, &mut buffer) {
+                    match PRIMARY_ATA
+                        .lock()
+                        .read_sectors(AtaDevice::Master, 0, 1, &mut buffer)
+                    {
                         Ok(()) => {
                             crate::serial_println!("Successfully read sector 0");
                             if buffer[510] == 0x55 && buffer[511] == 0xAA {

@@ -179,9 +179,9 @@ pub fn test_ata_driver_comprehensive() {
 
         unsafe {
             let controller = if *use_primary {
-                &mut PRIMARY_ATA
+                &mut PRIMARY_ATA.lock()
             } else {
-                &mut SECONDARY_ATA
+                &mut SECONDARY_ATA.lock()
             };
 
             match controller.identify(*device) {
