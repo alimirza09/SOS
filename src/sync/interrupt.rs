@@ -3,12 +3,6 @@ mod x86_64 {
 
     use core::arch::asm;
 
-    // pub fn enable_and_wfi() {
-    //     unsafe {
-    //         asm!("sti", "hlt", options(nomem, preserves_flags),);
-    //     }
-    // }
-
     pub fn disable_and_store() -> usize {
         let rflags: usize;
         unsafe {

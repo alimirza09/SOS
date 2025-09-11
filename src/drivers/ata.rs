@@ -1,14 +1,14 @@
 use alloc::string::{String, ToString};
-use spin::Mutex;
 use x86_64::instructions::port::{Port, PortReadOnly, PortWriteOnly};
 
-#[derive(Debug, Clone, Copy)]
-pub enum AtaError {
-    Timeout,
-    NotReady,
-    Error(u8),
-    DeviceNotFound,
-}
+const ATA_CMD_READ_SECTORS: u8 = 0x20;
+const ATA_CMD_READ_SECTORS_EXT: u8 = 0x24;
+const ATA_CMD_WRITE_SECTORS: u8 = 0x30;
+const ATA_CMD_WRITE_SECTORS_EXT: u8 = 0x34;
+const ATA_CMD_FLUSH_CACHE: u8 = 0xE7;
+
+const ATA_STATUS_DRQ: u8 = 0x08;
+const ATA_STATUS_ERR: u8 = 0x01;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AtaDevice {
@@ -29,6 +29,9 @@ pub struct AtaController {
     pub command_port: PortWriteOnly<u8>,
     pub control_port: PortWriteOnly<u8>,
     pub alt_status_port: PortReadOnly<u8>,
+
+    pub supports_lba48: [bool; 2],
+    pub max_sectors: [u64; 2],
 }
 
 impl AtaController {
@@ -46,13 +49,247 @@ impl AtaController {
             command_port: PortWriteOnly::new(base + 7),
             control_port: PortWriteOnly::new(base + 0x206),
             alt_status_port: PortReadOnly::new(base + 0x206),
+
+            supports_lba48: [false; 2],
+            max_sectors: [0; 2],
         }
     }
 
-    fn enable_interrupts(&mut self) {
-        unsafe {
-            self.control_port.write(0x00);
+    pub fn read_sectors(
+        &mut self,
+        device: AtaDevice,
+        lba: u64,
+        count: u16,
+        buffer: &mut [u8],
+    ) -> Result<(), AtaError> {
+        if buffer.len() < (count as usize * 512) {
+            return Err(AtaError::BufferTooSmall);
         }
+
+        let device_idx = device as usize;
+
+        if lba > 0xFFFFFFF || count > 256 || self.supports_lba48[device_idx] {
+            self.read_sectors_lba48(device, lba, count, buffer)
+        } else {
+            self.read_sectors_lba28(device, lba as u32, count as u8, buffer)
+        }
+    }
+
+    fn read_sectors_lba48(
+        &mut self,
+        device: AtaDevice,
+        lba: u64,
+        count: u16,
+        buffer: &mut [u8],
+    ) -> Result<(), AtaError> {
+        self.select_device(device)?;
+        self.wait_ready()?;
+
+        unsafe {
+            self.sector_count_port.write((count >> 8) as u8);
+            self.lba_low_port.write((lba >> 24) as u8);
+            self.lba_mid_port.write((lba >> 32) as u8);
+            self.lba_high_port.write((lba >> 40) as u8);
+
+            self.sector_count_port.write(count as u8);
+            self.lba_low_port.write(lba as u8);
+            self.lba_mid_port.write((lba >> 8) as u8);
+            self.lba_high_port.write((lba >> 16) as u8);
+
+            self.command_port.write(ATA_CMD_READ_SECTORS_EXT);
+        }
+
+        self.read_data_sectors(count, buffer)
+    }
+
+    fn read_sectors_lba28(
+        &mut self,
+        device: AtaDevice,
+        lba: u32,
+        count: u8,
+        buffer: &mut [u8],
+    ) -> Result<(), AtaError> {
+        self.select_device(device)?;
+        self.wait_ready()?;
+
+        unsafe {
+            self.sector_count_port.write(count);
+            self.lba_low_port.write(lba as u8);
+            self.lba_mid_port.write((lba >> 8) as u8);
+            self.lba_high_port.write((lba >> 16) as u8);
+            self.device_port
+                .write(0xE0 | ((device as u8) << 4) | ((lba >> 24) as u8 & 0x0F));
+            self.command_port.write(ATA_CMD_READ_SECTORS);
+        }
+
+        self.read_data_sectors(count as u16, buffer)
+    }
+
+    fn read_data_sectors(&mut self, count: u16, buffer: &mut [u8]) -> Result<(), AtaError> {
+        for sector in 0..count {
+            self.wait_data_ready()?;
+
+            let sector_start = sector as usize * 512;
+            for i in (0..512).step_by(2) {
+                let word = unsafe { self.data_port.read() };
+                buffer[sector_start + i] = word as u8;
+                buffer[sector_start + i + 1] = (word >> 8) as u8;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn write_sectors(
+        &mut self,
+        device: AtaDevice,
+        lba: u64,
+        buffer: &[u8],
+    ) -> Result<(), AtaError> {
+        if buffer.len() % 512 != 0 {
+            return Err(AtaError::InvalidSectorSize);
+        }
+
+        let count = buffer.len() / 512;
+        let device_idx = device as usize;
+
+        if lba > 0xFFFFFFF || count > 256 || self.supports_lba48[device_idx] {
+            self.write_sectors_lba48(device, lba, count as u16, buffer)
+        } else {
+            self.write_sectors_lba28(device, lba as u32, count as u8, buffer)
+        }
+    }
+
+    fn write_sectors_lba48(
+        &mut self,
+        device: AtaDevice,
+        lba: u64,
+        count: u16,
+        buffer: &[u8],
+    ) -> Result<(), AtaError> {
+        self.select_device(device)?;
+        self.wait_ready()?;
+
+        unsafe {
+            self.sector_count_port.write((count >> 8) as u8);
+            self.lba_low_port.write((lba >> 24) as u8);
+            self.lba_mid_port.write((lba >> 32) as u8);
+            self.lba_high_port.write((lba >> 40) as u8);
+
+            self.sector_count_port.write(count as u8);
+            self.lba_low_port.write(lba as u8);
+            self.lba_mid_port.write((lba >> 8) as u8);
+            self.lba_high_port.write((lba >> 16) as u8);
+
+            self.command_port.write(ATA_CMD_WRITE_SECTORS_EXT);
+        }
+
+        self.write_data_sectors(count, buffer)
+    }
+
+    fn write_sectors_lba28(
+        &mut self,
+        device: AtaDevice,
+        lba: u32,
+        count: u8,
+        buffer: &[u8],
+    ) -> Result<(), AtaError> {
+        self.select_device(device)?;
+        self.wait_ready()?;
+
+        unsafe {
+            self.sector_count_port.write(count);
+            self.lba_low_port.write(lba as u8);
+            self.lba_mid_port.write((lba >> 8) as u8);
+            self.lba_high_port.write((lba >> 16) as u8);
+            self.device_port
+                .write(0xE0 | ((device as u8) << 4) | ((lba >> 24) as u8 & 0x0F));
+            self.command_port.write(ATA_CMD_WRITE_SECTORS);
+        }
+
+        self.write_data_sectors(count as u16, buffer)
+    }
+
+    fn write_data_sectors(&mut self, count: u16, buffer: &[u8]) -> Result<(), AtaError> {
+        for sector in 0..count {
+            self.wait_data_ready()?;
+
+            let sector_start = sector as usize * 512;
+            for i in (0..512).step_by(2) {
+                let word =
+                    (buffer[sector_start + i + 1] as u16) << 8 | (buffer[sector_start + i] as u16);
+                unsafe { self.data_port.write(word) };
+            }
+        }
+
+        unsafe { self.command_port.write(ATA_CMD_FLUSH_CACHE) };
+        self.wait_ready()?;
+
+        Ok(())
+    }
+
+    fn wait_data_ready(&mut self) -> Result<(), AtaError> {
+        for _ in 0..10000 {
+            let status = unsafe { self.alt_status_port.read() };
+
+            if (status & ATA_STATUS_ERR) != 0 {
+                let error = unsafe { self.error_port.read() };
+                return Err(AtaError::Error(error));
+            }
+
+            if (status & ATA_STATUS_DRQ) != 0 {
+                return Ok(());
+            }
+        }
+        Err(AtaError::Timeout)
+    }
+
+    pub fn identify(&mut self, device: AtaDevice) -> Result<DriveInfo, AtaError> {
+        crate::serial_println!("ATA: Starting IDENTIFY for device {:?}", device);
+
+        self.disable_interrupts();
+
+        self.select_device(device)?;
+        self.wait_ready()?;
+
+        unsafe {
+            self.sector_count_port.write(0);
+            self.lba_low_port.write(0);
+            self.lba_mid_port.write(0);
+            self.lba_high_port.write(0);
+            self.command_port.write(0xEC);
+        }
+
+        for _ in 0..10000 {
+            let status = unsafe { self.alt_status_port.read() };
+
+            if status == 0 {
+                return Err(AtaError::NotReady);
+            }
+
+            if (status & 0x01) != 0 {
+                let error = unsafe { self.error_port.read() };
+                return Err(AtaError::Error(error));
+            }
+
+            if (status & 0x08) != 0 {
+                break;
+            }
+        }
+
+        let mut data = [0u16; 256];
+        for word in &mut data {
+            *word = unsafe { self.data_port.read() };
+        }
+
+        crate::serial_println!("ATA: IDENTIFY completed successfully");
+        let identify_data = data;
+        let info = DriveInfo::from_identify_data(&identify_data);
+
+        let device_idx = device as usize;
+        self.supports_lba48[device_idx] = info.supports_lba48;
+        self.max_sectors[device_idx] = info.sectors;
+
+        Ok(info)
     }
 
     fn disable_interrupts(&mut self) {
@@ -106,126 +343,6 @@ impl AtaController {
         }
         Err(AtaError::Timeout)
     }
-
-    pub fn identify(&mut self, device: AtaDevice) -> Result<[u16; 256], AtaError> {
-        crate::serial_println!("ATA: Starting IDENTIFY for device {:?}", device);
-
-        self.disable_interrupts();
-
-        self.select_device(device)?;
-        self.wait_ready()?;
-
-        unsafe {
-            self.sector_count_port.write(0);
-            self.lba_low_port.write(0);
-            self.lba_mid_port.write(0);
-            self.lba_high_port.write(0);
-            self.command_port.write(0xEC);
-        }
-
-        for _ in 0..10000 {
-            let status = unsafe { self.alt_status_port.read() };
-
-            if status == 0 {
-                return Err(AtaError::NotReady);
-            }
-
-            if (status & 0x01) != 0 {
-                let error = unsafe { self.error_port.read() };
-                return Err(AtaError::Error(error));
-            }
-
-            if (status & 0x08) != 0 {
-                break;
-            }
-        }
-
-        let mut data = [0u16; 256];
-        for word in &mut data {
-            *word = unsafe { self.data_port.read() };
-        }
-
-        crate::serial_println!("ATA: IDENTIFY completed successfully");
-        Ok(data)
-    }
-
-    pub fn read_sectors(
-        &mut self,
-        device: AtaDevice,
-        lba: u32,
-        count: u8,
-        buffer: &mut [u8],
-    ) -> Result<(), AtaError> {
-        if count == 0 || buffer.len() < (count as usize * 512) {
-            return Err(AtaError::Error(0));
-        }
-
-        self.enable_interrupts();
-
-        self.select_device(device)?;
-        self.wait_ready()?;
-
-        unsafe {
-            self.features_port.write(0);
-            self.sector_count_port.write(count);
-            self.lba_low_port.write(lba as u8);
-            self.lba_mid_port.write((lba >> 8) as u8);
-            self.lba_high_port.write((lba >> 16) as u8);
-            self.device_port
-                .write(0xE0 | ((device as u8) << 4) | ((lba >> 24) as u8 & 0x0F));
-            self.command_port.write(0x20);
-        }
-
-        for sector in 0..count {
-            for _ in 0..10000 {
-                let status = unsafe { self.alt_status_port.read() };
-                if (status & 0x08) != 0 {
-                    break;
-                }
-                if (status & 0x01) != 0 {
-                    let error = unsafe { self.error_port.read() };
-                    return Err(AtaError::Error(error));
-                }
-            }
-
-            let sector_start = sector as usize * 512;
-            for i in (0..512).step_by(2) {
-                let word = unsafe { self.data_port.read() };
-                buffer[sector_start + i] = word as u8;
-                buffer[sector_start + i + 1] = (word >> 8) as u8;
-            }
-        }
-
-        Ok(())
-    }
-}
-
-pub static mut PRIMARY_ATA: Mutex<AtaController> = Mutex::new(AtaController::new(0x1F0));
-pub static mut SECONDARY_ATA: Mutex<AtaController> = Mutex::new(AtaController::new(0x170));
-
-fn extract_string(data: &[u16; 256], start_word: usize, word_count: usize) -> String {
-    let mut result = String::new();
-
-    for i in 0..word_count {
-        if start_word + i >= 256 {
-            break;
-        }
-
-        let word = data[start_word + i];
-
-        let bytes = [(word >> 8) as u8, (word & 0xFF) as u8];
-
-        for &byte in &bytes {
-            if byte == 0 {
-                break;
-            }
-            if byte >= 0x20 && byte <= 0x7E {
-                result.push(byte as char);
-            }
-        }
-    }
-
-    result.trim().to_string()
 }
 
 pub struct DriveInfo {
@@ -341,62 +458,41 @@ impl DriveInfo {
     }
 }
 
-pub fn test_ata_driver() {
-    crate::serial_println!("=== ATA DRIVER TEST START ===");
+fn extract_string(data: &[u16; 256], start_word: usize, word_count: usize) -> String {
+    let mut result = String::new();
 
-    unsafe {
-        crate::serial_println!("Checking Primary Master...");
-        match PRIMARY_ATA.lock().identify(AtaDevice::Master) {
-            Ok(identify_data) => {
-                let info = DriveInfo::from_identify_data(&identify_data);
-                crate::serial_println!("Primary Master found:");
-                crate::serial_println!("  Model: {}", info.model);
-                crate::serial_println!("  Serial: {}", info.serial);
-                crate::serial_println!("  Firmware: {}", info.firmware);
-                crate::serial_println!("  Sectors: {}", info.sectors);
-                crate::serial_println!(
-                    "  Capacity: {} MB ({} GB)",
-                    info.capacity_mb(),
-                    info.capacity_gb()
-                );
-                crate::serial_println!("  LBA48 Support: {}", info.supports_lba48);
-                crate::serial_println!("  Sector Size: {} bytes", info.sector_size);
+    for i in 0..word_count {
+        if start_word + i >= 256 {
+            break;
+        }
 
-                crate::println!("Primary Master: {} - {} MB", info.model, info.capacity_mb());
+        let word = data[start_word + i];
 
-                if info.sectors > 0 {
-                    let mut buffer = [0u8; 512];
-                    match PRIMARY_ATA
-                        .lock()
-                        .read_sectors(AtaDevice::Master, 0, 1, &mut buffer)
-                    {
-                        Ok(()) => {
-                            crate::serial_println!("Successfully read sector 0");
-                            if buffer[510] == 0x55 && buffer[511] == 0xAA {
-                                crate::serial_println!("Valid MBR signature found");
-                                crate::println!("MBR signature: Valid");
-                            } else {
-                                crate::println!("MBR signature: Invalid or missing");
-                            }
+        let bytes = [(word >> 8) as u8, (word & 0xFF) as u8];
 
-                            crate::serial_print!("First 16 bytes of sector 0: ");
-                            for i in 0..16 {
-                                crate::serial_print!("{:02X} ", buffer[i]);
-                            }
-                            crate::serial_println!();
-                        }
-                        Err(e) => {
-                            crate::serial_println!("Error reading sector: {:?}", e);
-                        }
-                    }
-                }
+        for &byte in &bytes {
+            if byte == 0 {
+                break;
             }
-            Err(e) => {
-                crate::serial_println!("Primary Master error: {:?}", e);
-                crate::println!("Primary Master: Not found");
+            if byte >= 0x20 && byte <= 0x7E {
+                result.push(byte as char);
             }
         }
     }
 
-    crate::serial_println!("=== ATA DRIVER TEST COMPLETE ===");
+    result.trim().to_string()
 }
+
+#[derive(Debug, Clone, Copy)]
+pub enum AtaError {
+    Timeout,
+    NotReady,
+    Error(u8),
+    DeviceNotFound,
+    BufferTooSmall,
+    InvalidSectorSize,
+    UnsupportedOperation,
+}
+
+pub static mut PRIMARY_ATA: AtaController = AtaController::new(0x1F0);
+pub static mut SECONDARY_ATA: AtaController = AtaController::new(0x170);

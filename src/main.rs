@@ -36,7 +36,6 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     }
 
     test_ata_driver_safe();
-
     processors()
 }
 
@@ -179,15 +178,15 @@ pub fn test_ata_driver_comprehensive() {
 
         unsafe {
             let controller = if *use_primary {
-                &mut PRIMARY_ATA.lock()
+                &mut PRIMARY_ATA
             } else {
-                &mut SECONDARY_ATA.lock()
+                &mut SECONDARY_ATA
             };
 
             match controller.identify(*device) {
                 Ok(identify_data) => {
                     found_devices += 1;
-                    let info = DriveInfo::from_identify_data(&identify_data);
+                    let info = identify_data;
 
                     crate::serial_println!("{} found:", name);
                     crate::serial_println!("  Model: {}", info.model);
