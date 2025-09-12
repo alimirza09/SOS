@@ -1,4 +1,5 @@
 use alloc::string::{String, ToString};
+use spin::Mutex;
 use x86_64::instructions::port::{Port, PortReadOnly, PortWriteOnly};
 
 const ATA_CMD_READ_SECTORS: u8 = 0x20;
@@ -6,14 +7,48 @@ const ATA_CMD_READ_SECTORS_EXT: u8 = 0x24;
 const ATA_CMD_WRITE_SECTORS: u8 = 0x30;
 const ATA_CMD_WRITE_SECTORS_EXT: u8 = 0x34;
 const ATA_CMD_FLUSH_CACHE: u8 = 0xE7;
+const ATA_CMD_IDENTIFY: u8 = 0xEC;
 
+const ATA_STATUS_BSY: u8 = 0x80;
 const ATA_STATUS_DRQ: u8 = 0x08;
 const ATA_STATUS_ERR: u8 = 0x01;
+const ATA_STATUS_DF: u8 = 0x20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AtaDevice {
     Master = 0,
     Slave = 1,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum AtaError {
+    Timeout,
+    NotReady,
+    Error(u8),
+    DeviceNotFound,
+    BufferTooSmall,
+    InvalidSectorSize,
+    UnsupportedOperation,
+    InvalidLba,
+    CommandFailed,
+    DeviceFault,
+}
+
+impl core::fmt::Display for AtaError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            AtaError::Error(code) => write!(f, "ATA error: 0x{:02X}", code),
+            AtaError::Timeout => write!(f, "ATA timeout"),
+            AtaError::NotReady => write!(f, "ATA device not ready"),
+            AtaError::DeviceNotFound => write!(f, "ATA device not found"),
+            AtaError::BufferTooSmall => write!(f, "Buffer too small"),
+            AtaError::InvalidSectorSize => write!(f, "Invalid sector size"),
+            AtaError::UnsupportedOperation => write!(f, "Unsupported operation"),
+            AtaError::InvalidLba => write!(f, "Invalid LBA"),
+            AtaError::CommandFailed => write!(f, "Command failed"),
+            AtaError::DeviceFault => write!(f, "Device fault"),
+        }
+    }
 }
 
 pub struct AtaController {
@@ -67,6 +102,7 @@ impl AtaController {
         }
 
         let device_idx = device as usize;
+        crate::serial_println!("ATA: Reading {} sectors from LBA {}", count, lba);
 
         if lba > 0xFFFFFFF || count > 256 || self.supports_lba48[device_idx] {
             self.read_sectors_lba48(device, lba, count, buffer)
@@ -86,16 +122,19 @@ impl AtaController {
         self.wait_ready()?;
 
         unsafe {
+            // High bytes
             self.sector_count_port.write((count >> 8) as u8);
             self.lba_low_port.write((lba >> 24) as u8);
             self.lba_mid_port.write((lba >> 32) as u8);
             self.lba_high_port.write((lba >> 40) as u8);
 
+            // Low bytes
             self.sector_count_port.write(count as u8);
             self.lba_low_port.write(lba as u8);
             self.lba_mid_port.write((lba >> 8) as u8);
             self.lba_high_port.write((lba >> 16) as u8);
 
+            self.device_port.write(0x40 | ((device as u8) << 4));
             self.command_port.write(ATA_CMD_READ_SECTORS_EXT);
         }
 
@@ -170,16 +209,19 @@ impl AtaController {
         self.wait_ready()?;
 
         unsafe {
+            // High bytes
             self.sector_count_port.write((count >> 8) as u8);
             self.lba_low_port.write((lba >> 24) as u8);
             self.lba_mid_port.write((lba >> 32) as u8);
             self.lba_high_port.write((lba >> 40) as u8);
 
+            // Low bytes
             self.sector_count_port.write(count as u8);
             self.lba_low_port.write(lba as u8);
             self.lba_mid_port.write((lba >> 8) as u8);
             self.lba_high_port.write((lba >> 16) as u8);
 
+            self.device_port.write(0x40 | ((device as u8) << 4));
             self.command_port.write(ATA_CMD_WRITE_SECTORS_EXT);
         }
 
@@ -228,18 +270,34 @@ impl AtaController {
     }
 
     fn wait_data_ready(&mut self) -> Result<(), AtaError> {
-        for _ in 0..10000 {
+        for i in 0..10000 {
             let status = unsafe { self.alt_status_port.read() };
 
             if (status & ATA_STATUS_ERR) != 0 {
                 let error = unsafe { self.error_port.read() };
+                crate::serial_println!(
+                    "ATA: Data ready error - status: 0x{:02X}, error: 0x{:02X}",
+                    status,
+                    error
+                );
                 return Err(AtaError::Error(error));
+            }
+
+            if (status & ATA_STATUS_DF) != 0 {
+                crate::serial_println!("ATA: Device fault detected");
+                return Err(AtaError::DeviceFault);
             }
 
             if (status & ATA_STATUS_DRQ) != 0 {
                 return Ok(());
             }
+
+            if i % 1000 == 0 {
+                crate::serial_println!("ATA: Waiting for data ready, status: 0x{:02X}", status);
+            }
         }
+
+        crate::serial_println!("ATA: Timeout waiting for data ready");
         Err(AtaError::Timeout)
     }
 
@@ -256,23 +314,39 @@ impl AtaController {
             self.lba_low_port.write(0);
             self.lba_mid_port.write(0);
             self.lba_high_port.write(0);
-            self.command_port.write(0xEC);
+            self.device_port.write(0xA0 | ((device as u8) << 4));
+            self.command_port.write(ATA_CMD_IDENTIFY);
         }
 
-        for _ in 0..10000 {
+        // Wait for BSY to clear and DRQ to set
+        for i in 0..10000 {
             let status = unsafe { self.alt_status_port.read() };
 
-            if status == 0 {
-                return Err(AtaError::NotReady);
+            if status == 0xFF {
+                return Err(AtaError::DeviceNotFound);
             }
 
-            if (status & 0x01) != 0 {
+            if (status & ATA_STATUS_ERR) != 0 {
                 let error = unsafe { self.error_port.read() };
+                crate::serial_println!(
+                    "ATA: IDENTIFY error - status: 0x{:02X}, error: 0x{:02X}",
+                    status,
+                    error
+                );
                 return Err(AtaError::Error(error));
             }
 
-            if (status & 0x08) != 0 {
+            if (status & ATA_STATUS_DF) != 0 {
+                crate::serial_println!("ATA: Device fault during IDENTIFY");
+                return Err(AtaError::DeviceFault);
+            }
+
+            if (status & ATA_STATUS_DRQ) != 0 {
                 break;
+            }
+
+            if i % 1000 == 0 {
+                crate::serial_println!("ATA: Waiting for IDENTIFY data, status: 0x{:02X}", status);
             }
         }
 
@@ -282,8 +356,7 @@ impl AtaController {
         }
 
         crate::serial_println!("ATA: IDENTIFY completed successfully");
-        let identify_data = data;
-        let info = DriveInfo::from_identify_data(&identify_data);
+        let info = DriveInfo::from_identify_data(&data);
 
         let device_idx = device as usize;
         self.supports_lba48[device_idx] = info.supports_lba48;
@@ -313,35 +386,75 @@ impl AtaController {
         }
         self.delay_400ns();
 
-        for _ in 0..1000 {
+        for i in 0..1000 {
             let status = unsafe { self.alt_status_port.read() };
-            if status != 0xFF && (status & 0x80) == 0 {
+            if status != 0xFF && (status & ATA_STATUS_BSY) == 0 {
                 return Ok(());
             }
+
+            if i % 100 == 0 {
+                crate::serial_println!("ATA: Selecting device, status: 0x{:02X}", status);
+            }
         }
+
+        crate::serial_println!("ATA: Device selection timeout");
         Err(AtaError::DeviceNotFound)
     }
 
     fn wait_ready(&mut self) -> Result<(), AtaError> {
         self.delay_400ns();
 
-        for _ in 0..10000 {
+        for i in 0..10000 {
             let status = unsafe { self.alt_status_port.read() };
 
             if status == 0xFF {
                 return Err(AtaError::DeviceNotFound);
             }
 
-            if (status & 0x01) != 0 {
+            if (status & ATA_STATUS_ERR) != 0 {
                 let error = unsafe { self.error_port.read() };
+                crate::serial_println!(
+                    "ATA: Ready error - status: 0x{:02X}, error: 0x{:02X}",
+                    status,
+                    error
+                );
                 return Err(AtaError::Error(error));
             }
 
-            if (status & 0x80) == 0 {
+            if (status & ATA_STATUS_DF) != 0 {
+                crate::serial_println!("ATA: Device fault");
+                return Err(AtaError::DeviceFault);
+            }
+
+            if (status & ATA_STATUS_BSY) == 0 {
                 return Ok(());
             }
+
+            if i % 1000 == 0 {
+                crate::serial_println!("ATA: Waiting for ready, status: 0x{:02X}", status);
+            }
         }
+
+        crate::serial_println!("ATA: Timeout waiting for ready");
         Err(AtaError::Timeout)
+    }
+
+    pub fn diagnose(&mut self, device: AtaDevice) -> Result<(), AtaError> {
+        crate::serial_println!("ATA: Diagnosing device {:?}", device);
+
+        // Test basic communication
+        self.select_device(device)?;
+        self.wait_ready()?;
+
+        // Read status to verify communication
+        let status = unsafe { self.alt_status_port.read() };
+        crate::serial_println!("ATA: Device status: 0x{:02X}", status);
+
+        if status == 0xFF {
+            return Err(AtaError::DeviceNotFound);
+        }
+
+        Ok(())
     }
 }
 
@@ -360,40 +473,25 @@ impl DriveInfo {
         let serial = extract_string(data, 10, 10);
         let firmware = extract_string(data, 23, 4);
 
-        crate::serial_println!(
-            "ATA Debug: Word 60 = 0x{:04X}, Word 61 = 0x{:04X}",
-            data[60],
-            data[61]
-        );
-        crate::serial_println!(
-            "ATA Debug: Word 83 = 0x{:04X} (LBA48 support check)",
-            data[83]
-        );
-        crate::serial_println!(
-            "ATA Debug: Words 100-103 = 0x{:04X} 0x{:04X} 0x{:04X} 0x{:04X}",
-            data[100],
-            data[101],
-            data[102],
-            data[103]
-        );
+        // Check if device exists (word 0 != 0)
+        if data[0] == 0 {
+            return Self {
+                model: "No Device".to_string(),
+                serial: "".to_string(),
+                firmware: "".to_string(),
+                sectors: 0,
+                supports_lba48: false,
+                sector_size: 512,
+            };
+        }
 
         let lba_supported = (data[49] & (1 << 9)) != 0;
-        crate::serial_println!("ATA Debug: LBA supported: {}", lba_supported);
 
         if !lba_supported {
-            crate::serial_println!("ATA Debug: Using CHS mode (legacy)");
-
             let cylinders = data[1] as u32;
             let heads = data[3] as u32;
             let sectors_per_track = data[6] as u32;
             let total_sectors = cylinders * heads * sectors_per_track;
-            crate::serial_println!(
-                "ATA Debug: CHS: C={} H={} S={} = {} sectors",
-                cylinders,
-                heads,
-                sectors_per_track,
-                total_sectors
-            );
 
             return Self {
                 model,
@@ -406,38 +504,19 @@ impl DriveInfo {
         }
 
         let lba28_sectors = ((data[61] as u32) << 16) | (data[60] as u32);
-        crate::serial_println!("ATA Debug: LBA28 sectors: {}", lba28_sectors);
-
         let supports_lba48 = (data[83] & (1 << 10)) != 0;
-        crate::serial_println!("ATA Debug: LBA48 supported: {}", supports_lba48);
 
         let sectors = if supports_lba48 {
             let lba48_sectors = ((data[103] as u64) << 48)
                 | ((data[102] as u64) << 32)
                 | ((data[101] as u64) << 16)
                 | (data[100] as u64);
-            crate::serial_println!("ATA Debug: LBA48 sectors: {}", lba48_sectors);
-
-            if lba48_sectors > lba28_sectors as u64 {
-                lba48_sectors
-            } else {
-                lba28_sectors as u64
-            }
+            lba48_sectors
         } else {
             lba28_sectors as u64
         };
 
-        crate::serial_println!("ATA Debug: Final sector count: {}", sectors);
-
-        let sector_size = if (data[106] & (1 << 12)) != 0 {
-            if (data[106] & (1 << 13)) == 0 {
-                ((data[118] as u32) << 16 | data[117] as u32) as u16 * 2
-            } else {
-                512
-            }
-        } else {
-            512
-        };
+        let sector_size = 512; // Assume 512 for simplicity
 
         Self {
             model,
@@ -467,7 +546,6 @@ fn extract_string(data: &[u16; 256], start_word: usize, word_count: usize) -> St
         }
 
         let word = data[start_word + i];
-
         let bytes = [(word >> 8) as u8, (word & 0xFF) as u8];
 
         for &byte in &bytes {
@@ -483,16 +561,30 @@ fn extract_string(data: &[u16; 256], start_word: usize, word_count: usize) -> St
     result.trim().to_string()
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum AtaError {
-    Timeout,
-    NotReady,
-    Error(u8),
-    DeviceNotFound,
-    BufferTooSmall,
-    InvalidSectorSize,
-    UnsupportedOperation,
+pub static PRIMARY_ATA: Mutex<AtaController> = Mutex::new(AtaController::new(0x1F0));
+pub static SECONDARY_ATA: Mutex<AtaController> = Mutex::new(AtaController::new(0x170));
+
+// Helper functions for safe access
+pub fn read_sectors(
+    controller: bool,
+    device: AtaDevice,
+    lba: u64,
+    count: u16,
+    buffer: &mut [u8],
+) -> Result<(), AtaError> {
+    if controller {
+        PRIMARY_ATA.lock().read_sectors(device, lba, count, buffer)
+    } else {
+        SECONDARY_ATA
+            .lock()
+            .read_sectors(device, lba, count, buffer)
+    }
 }
 
-pub static mut PRIMARY_ATA: AtaController = AtaController::new(0x1F0);
-pub static mut SECONDARY_ATA: AtaController = AtaController::new(0x170);
+pub fn identify_drive(controller: bool, device: AtaDevice) -> Result<DriveInfo, AtaError> {
+    if controller {
+        PRIMARY_ATA.lock().identify(device)
+    } else {
+        SECONDARY_ATA.lock().identify(device)
+    }
+}

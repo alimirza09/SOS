@@ -10,6 +10,7 @@ pub mod fs;
 pub mod memory;
 pub mod sched;
 pub mod sync;
+pub mod syscall;
 pub mod task;
 
 pub use arch::x86_64::{gdt, interrupts, smp, timer};

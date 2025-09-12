@@ -103,7 +103,7 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
 extern "x86-interrupt" fn ata_primary_interrupt_handler(_stack_frame: InterruptStackFrame) {
     use crate::drivers::ata::PRIMARY_ATA;
     unsafe {
-        let status = PRIMARY_ATA.status_port.read();
+        let status = PRIMARY_ATA.lock().status_port.read();
         crate::serial_println!("ATA Primary interrupt: status 0x{:02X}", status);
     }
 
@@ -114,10 +114,9 @@ extern "x86-interrupt" fn ata_primary_interrupt_handler(_stack_frame: InterruptS
 }
 
 extern "x86-interrupt" fn ata_secondary_interrupt_handler(_stack_frame: InterruptStackFrame) {
-    // Read status to clear interrupt
     use crate::drivers::ata::SECONDARY_ATA;
     unsafe {
-        let status = SECONDARY_ATA.status_port.read();
+        let status = SECONDARY_ATA.lock().status_port.read();
         crate::serial_println!("ATA Secondary interrupt: status 0x{:02X}", status);
     }
 

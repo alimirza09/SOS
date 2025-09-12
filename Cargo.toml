@@ -21,6 +21,8 @@ features = ["spin_no_std"]
 
 [[bin]]
 name = "sos"
+test = false
+doctest = false
 bench = false
 
 [dependencies.crossbeam-queue]

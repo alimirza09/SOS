@@ -35,6 +35,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
         x86_64::instructions::nop();
     }
 
+    clear_screen();
     test_ata_driver_safe();
     processors()
 }
@@ -137,7 +138,7 @@ fn processors() -> ! {
     executor.run();
 }
 
-use sos::drivers::ata::*;
+use sos::drivers::{ata::*, clear_screen};
 use sos::serial_print;
 
 fn test_ata_driver_safe() {
@@ -176,40 +177,38 @@ pub fn test_ata_driver_comprehensive() {
     for (name, device, use_primary) in devices_to_test.iter() {
         crate::serial_println!("Checking {}...", name);
 
-        unsafe {
-            let controller = if *use_primary {
-                &mut PRIMARY_ATA
-            } else {
-                &mut SECONDARY_ATA
-            };
+        let controller = if *use_primary {
+            &mut PRIMARY_ATA.lock()
+        } else {
+            &mut SECONDARY_ATA.lock()
+        };
 
-            match controller.identify(*device) {
-                Ok(identify_data) => {
-                    found_devices += 1;
-                    let info = identify_data;
+        match controller.identify(*device) {
+            Ok(identify_data) => {
+                found_devices += 1;
+                let info = identify_data;
 
-                    crate::serial_println!("{} found:", name);
-                    crate::serial_println!("  Model: {}", info.model);
-                    crate::serial_println!("  Serial: {}", info.serial);
-                    crate::serial_println!("  Firmware: {}", info.firmware);
-                    crate::serial_println!("  Sectors: {}", info.sectors);
-                    crate::serial_println!(
-                        "  Capacity: {} MB ({} GB)",
-                        info.capacity_mb(),
-                        info.capacity_gb()
-                    );
-                    crate::serial_println!("  LBA48 Support: {}", info.supports_lba48);
-                    crate::serial_println!("  Sector Size: {} bytes", info.sector_size);
+                crate::serial_println!("{} found:", name);
+                crate::serial_println!("  Model: {}", info.model);
+                crate::serial_println!("  Serial: {}", info.serial);
+                crate::serial_println!("  Firmware: {}", info.firmware);
+                crate::serial_println!("  Sectors: {}", info.sectors);
+                crate::serial_println!(
+                    "  Capacity: {} MB ({} GB)",
+                    info.capacity_mb(),
+                    info.capacity_gb()
+                );
+                crate::serial_println!("  LBA48 Support: {}", info.supports_lba48);
+                crate::serial_println!("  Sector Size: {} bytes", info.sector_size);
 
-                    crate::println!("{}: {} - {} MB", name, info.model, info.capacity_mb());
+                crate::println!("{}: {} - {} MB", name, info.model, info.capacity_mb());
 
-                    if info.sectors > 0 {
-                        test_read_sectors(name, controller, *device);
-                    }
+                if info.sectors > 0 {
+                    test_read_sectors(name, controller, *device);
                 }
-                Err(e) => {
-                    crate::serial_println!("{} error: {:?}", name, e);
-                }
+            }
+            Err(e) => {
+                crate::serial_println!("{} error: {:?}", name, e);
             }
         }
     }
