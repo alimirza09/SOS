@@ -31,12 +31,15 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     let mut mapper = unsafe { paging::init(phys_mem_offset, &mut frame_allocator) };
     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("Heap initialization failed");
 
-    for _ in 0..100000 {
-        x86_64::instructions::nop();
+    clear_screen();
+    sos::drivers::pci::test_pci();
+    use sos::drivers::pci::{find_virtio_gpu, virtio_gpu::VirtioGpu};
+
+    if let Some(dev) = find_virtio_gpu() {
+        let mut gpu = VirtioGpu::new(dev);
+        gpu.init_and_test(&mut mapper, &mut frame_allocator);
     }
 
-    clear_screen();
-    test_ata_driver_safe();
     processors()
 }
 

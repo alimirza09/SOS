@@ -25,17 +25,8 @@ pub fn hlt_loop() -> ! {
     }
 }
 pub fn init() {
-    println!("Initializing GDT...");
     arch::x86_64::gdt::init();
-
-    println!("Initializing IDT...");
     arch::x86_64::interrupts::init_idt();
-
-    println!("Initializing PICs...");
     unsafe { arch::x86_64::interrupts::PICS.lock().initialize() };
-
-    println!("Enabling interrupts...");
     x86_64::instructions::interrupts::enable();
-
-    println!("System initialization complete");
 }
