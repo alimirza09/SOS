@@ -19,4 +19,4 @@ jobs:
     - name: Install
       run: cargo install bootimage && rustup component add rust-src --toolchain nightly
     - name: Build
-      run: ./build.sh
+      run: cargo bootimage --target x86_64-sos-github.json
