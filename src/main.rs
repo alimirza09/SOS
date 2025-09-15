@@ -21,6 +21,7 @@ entry_point!(kernel_main);
 fn kernel_main(boot_info: &'static BootInfo) -> ! {
     set_colors(Color::Green, Color::Black);
     println!("Welcome to sOS!");
+    serial_println!("Welcome to sOS!");
 
     sos::init();
     use sos::memory::{allocator, paging, paging::BootInfoFrameAllocator};
@@ -32,15 +33,23 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("Heap initialization failed");
 
     clear_screen();
-    sos::drivers::pci::test_pci();
-    use sos::drivers::pci::{find_virtio_gpu, virtio_gpu::VirtioGpu};
+    use sos::drivers::pci::*;
 
-    if let Some(dev) = find_virtio_gpu() {
-        let mut gpu = VirtioGpu::new(dev);
-        gpu.init_and_test(&mut mapper, &mut frame_allocator);
+    if let Some(virtio_gpu) = find_virtio_gpu() {
+        let mut virtio_gpu_device = VirtioGpu::new(virtio_gpu);
+
+        virtio_gpu_device.init_and_test(&mut mapper, &mut frame_allocator);
+
+        // Add a short delay to allow QEMU to render the frame
+        for _ in 0..1_000_000 {
+            core::hint::spin_loop();
+        }
+    } else {
+        serial_println!("No VirtIO-GPU device found.");
     }
 
-    processors()
+    serial_println!("Entering an infinite loop.");
+    sos::hlt_loop();
 }
 
 #[panic_handler]
