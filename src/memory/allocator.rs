@@ -2,14 +2,14 @@ use alloc::alloc::{GlobalAlloc, Layout};
 use core::ptr::null_mut;
 use linked_list_allocator::LockedHeap;
 use x86_64::{
-    VirtAddr,
     structures::paging::{
-        FrameAllocator, Mapper, Page, PageTableFlags, Size4KiB, mapper::MapToError,
+        mapper::MapToError, FrameAllocator, Mapper, Page, PageTableFlags, Size4KiB,
     },
+    VirtAddr,
 };
 
 pub const HEAP_START: usize = 0x_4444_4444_0000;
-pub const HEAP_SIZE: usize = 16 * 1024 * 1024; // 1Mb
+pub const HEAP_SIZE: usize = 4 * 1024 * 1024; // 4MB
 
 #[global_allocator]
 static ALLOCATOR: LockedHeap = LockedHeap::empty();

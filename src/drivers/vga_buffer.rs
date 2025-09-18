@@ -64,8 +64,6 @@ struct Buffer {
     chars: [[Volatile<ScreenChar>; BUFFER_WIDTH]; BUFFER_HEIGHT],
 }
 
-/* -------- cursor control -------- */
-
 fn update_cursor(row: usize, col: usize) {
     use x86_64::instructions::port::Port;
 
@@ -81,7 +79,6 @@ fn update_cursor(row: usize, col: usize) {
     }
 }
 
-/// Enable hardware cursor; start/end are scanlines (0..=31 but VGA uses 0..=15).
 pub fn enable_cursor(start: u8, end: u8) {
     unsafe {
         let mut index_port = Port::<u8>::new(0x3D4);
@@ -103,12 +100,11 @@ pub fn disable_cursor() {
         let mut data_port = Port::<u8>::new(0x3D5);
 
         index_port.write(0x0A);
-        let _ = data_port.read(); // throwaway read to keep symmetry
-        data_port.write(0x20); // bit 5 = disable
+        let _ = data_port.read();
+        data_port.write(0x20);
     }
 }
 
-/// Set cursor by absolute cell. Write low byte then high byte.
 fn set_cursor_pos_cell(cell: usize) {
     let pos: u16 = cell as u16;
     unsafe {
@@ -126,8 +122,6 @@ fn set_cursor_pos_cell(cell: usize) {
 fn set_cursor_pos_rc(row: usize, col: usize) {
     set_cursor_pos_cell(row * BUFFER_WIDTH + col);
 }
-
-/* -------- writer -------- */
 
 pub struct Writer {
     pub row_position: usize,
@@ -254,8 +248,6 @@ impl fmt::Write for Writer {
         Ok(())
     }
 }
-
-/* -------- macros + helpers -------- */
 
 #[macro_export]
 macro_rules! print {

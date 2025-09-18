@@ -38,16 +38,6 @@ pub enum PciBarType {
     Io,
 }
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct VirtGpuCmdSetScanout {
-    pub header: virtio_gpu::CtrlHdr,
-    pub rect: virtio_gpu::Rect,
-    pub scanout_id: u32,
-    pub resource_id: u32,
-    pub padding: u32,
-}
-
 impl Default for PciBar {
     fn default() -> Self {
         Self {
@@ -69,12 +59,14 @@ impl PciDevice {
         let vendor_id = (vendor_device & 0xFFFF) as u16;
         let device_id = ((vendor_device >> 16) & 0xFFFF) as u16;
 
+        // Read class code information
         let class_info = pci_read_config(bus, slot, func, 0x08);
         let revision = (class_info & 0xFF) as u8;
         let prog_if = ((class_info >> 8) & 0xFF) as u8;
         let subclass = ((class_info >> 16) & 0xFF) as u8;
         let class_code = ((class_info >> 24) & 0xFF) as u8;
 
+        // Read header type and command/status
         let header_cmd_status = pci_read_config(bus, slot, func, 0x04);
         let command = (header_cmd_status & 0xFFFF) as u16;
         let status = ((header_cmd_status >> 16) & 0xFFFF) as u16;
@@ -102,17 +94,19 @@ impl PciDevice {
     }
 
     pub fn enable(&self) {
-        let addr = (1 << 31)
+        let addr = (1 << 31)                // enable bit
             | ((self.bus as u32) << 16)
             | ((self.slot as u32) << 11)
             | ((self.func as u32) << 8)
-            | 0x04;
+            | 0x04; // command register offset
 
+        // Read current command register
         let mut port = Port::<u32>::new(0xCF8);
         unsafe { port.write(addr) };
         let mut data_port = Port::<u32>::new(0xCFC);
         let mut command: u32 = unsafe { data_port.read() };
 
+        // Enable I/O space, memory space, bus mastering
         command |= 1 | (1 << 1) | (1 << 2);
 
         unsafe {
@@ -189,9 +183,10 @@ fn read_bars(bus: u8, slot: u8, func: u8) -> [PciBar; 6] {
             continue;
         }
 
+        // Write all 1s to determine size
         pci_write_config(bus, slot, func, offset, 0xFFFFFFFF);
         let size_mask = pci_read_config(bus, slot, func, offset);
-
+        // Restore original value
         pci_write_config(bus, slot, func, offset, original);
 
         if size_mask == 0 {
@@ -202,6 +197,7 @@ fn read_bars(bus: u8, slot: u8, func: u8) -> [PciBar; 6] {
         let is_io = (original & 1) != 0;
 
         if is_io {
+            // I/O BAR
             let address = (original & 0xFFFFFFFC) as u64;
             let size = calculate_bar_size(size_mask & 0xFFFFFFFC);
 
@@ -213,11 +209,13 @@ fn read_bars(bus: u8, slot: u8, func: u8) -> [PciBar; 6] {
             };
             i += 1;
         } else {
+            // Memory BAR
             let bar_type_bits = (original >> 1) & 0x3;
             let prefetchable = (original & 0x8) != 0;
 
             match bar_type_bits {
                 0 => {
+                    // 32-bit memory BAR
                     let address = (original & 0xFFFFFFF0) as u64;
                     let size = calculate_bar_size(size_mask & 0xFFFFFFF0);
 
@@ -230,6 +228,7 @@ fn read_bars(bus: u8, slot: u8, func: u8) -> [PciBar; 6] {
                     i += 1;
                 }
                 2 => {
+                    // 64-bit memory BAR
                     if i + 1 >= 6 {
                         i += 1;
                         continue;
@@ -238,9 +237,10 @@ fn read_bars(bus: u8, slot: u8, func: u8) -> [PciBar; 6] {
                     let high_offset = 0x10 + ((i + 1) * 4) as u8;
                     let original_high = pci_read_config(bus, slot, func, high_offset);
 
+                    // Write all 1s to high part to determine size
                     pci_write_config(bus, slot, func, high_offset, 0xFFFFFFFF);
                     let size_mask_high = pci_read_config(bus, slot, func, high_offset);
-
+                    // Restore original value
                     pci_write_config(bus, slot, func, high_offset, original_high);
 
                     let address = ((original_high as u64) << 32) | ((original & 0xFFFFFFF0) as u64);
@@ -255,9 +255,11 @@ fn read_bars(bus: u8, slot: u8, func: u8) -> [PciBar; 6] {
                         prefetchable,
                     };
 
+                    // Skip the next BAR as it's part of this 64-bit BAR
                     i += 2;
                 }
                 _ => {
+                    // Reserved or invalid
                     i += 1;
                 }
             }
@@ -293,7 +295,9 @@ pub fn scan_pci() -> Vec<PciDevice> {
                 if let Some(dev) = PciDevice::from_location(bus, slot, func) {
                     devices.push(dev);
 
+                    // Check if this is a multi-function device
                     if func == 0 && (dev.header_type & 0x80) == 0 {
+                        // Single function device, skip other functions
                         break;
                     }
                 }
@@ -307,6 +311,8 @@ pub fn scan_pci() -> Vec<PciDevice> {
 
 pub fn find_virtio_gpu() -> Option<PciDevice> {
     for dev in scan_pci() {
+        // VirtIO vendor ID is 0x1AF4
+        // VirtIO GPU device ID is 0x1050 (modern) or 0x1010 (legacy)
         if dev.vendor_id == 0x1AF4 && (dev.device_id == 0x1050 || dev.device_id == 0x1010) {
             serial_println!("Found VirtIO-GPU device:");
             dev.print_info();
@@ -358,7 +364,7 @@ pub fn test_pci() {
 
     for dev in &devices {
         dev.print_info();
-        serial_println!();
+        serial_println!(""); // Empty line for readability
     }
 
     serial_println!("Looking for VirtIO-GPU...");

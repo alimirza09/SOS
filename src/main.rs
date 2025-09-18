@@ -17,13 +17,12 @@ use sos::task::{executor::Executor, Task};
 use sos::{println, serial_println};
 
 entry_point!(kernel_main);
-
 fn kernel_main(boot_info: &'static BootInfo) -> ! {
     set_colors(Color::Green, Color::Black);
     println!("Welcome to sOS!");
     serial_println!("Welcome to sOS!");
-
     sos::init();
+
     use sos::memory::{allocator, paging, paging::BootInfoFrameAllocator};
     use x86_64::VirtAddr;
 
@@ -32,20 +31,58 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     let mut mapper = unsafe { paging::init(phys_mem_offset, &mut frame_allocator) };
     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("Heap initialization failed");
 
-    clear_screen();
-    use sos::drivers::pci::*;
+    use sos::drivers::pci::virtio_gpu::VirtioGpu;
+    // After your PCI scan, find and initialize the GPU
+    if let Some(gpu_dev) = sos::drivers::pci::find_virtio_gpu() {
+        serial_println!("Initializing VirtIO-GPU...");
 
-    if let Some(virtio_gpu) = find_virtio_gpu() {
-        let mut virtio_gpu_device = VirtioGpu::new(virtio_gpu);
+        let mut gpu = sos::drivers::pci::VirtioGpu::new(gpu_dev);
 
-        virtio_gpu_device.init_and_test(&mut mapper, &mut frame_allocator);
+        match gpu.init(&mut mapper, &mut frame_allocator) {
+            Ok(()) => {
+                serial_println!("VirtIO-GPU initialized successfully!");
 
-        // Add a short delay to allow QEMU to render the frame
-        for _ in 0..1_000_000 {
-            core::hint::spin_loop();
+                // Get framebuffer access
+                let (fb_ptr, width, height) = gpu.get_framebuffer();
+                serial_println!("Framebuffer ready: {}x{} at {:p}", width, height, fb_ptr);
+
+                // Test drawing additional patterns
+                unsafe {
+                    // Draw a white diagonal line
+                    for i in 0..core::cmp::min(width, height) {
+                        *fb_ptr.add((i * width + i) as usize) = 0xFFFFFFFF;
+                    }
+
+                    // Draw a red border
+                    for x in 0..width {
+                        *fb_ptr.add(x as usize) = 0xFF0000FF; // Top border
+                        *fb_ptr.add(((height - 1) * width + x) as usize) = 0xFF0000FF;
+                        // Bottom border
+                    }
+                    for y in 0..height {
+                        *fb_ptr.add((y * width) as usize) = 0xFF0000FF; // Left border
+                        *fb_ptr.add((y * width + width - 1) as usize) = 0xFF0000FF;
+                        // Right border
+                    }
+                }
+
+                match gpu.refresh_display(&mut mapper, &mut frame_allocator) {
+                    Ok(()) => {
+                        serial_println!("Display refreshed - you should see output on screen!")
+                    }
+                    Err(e) => serial_println!("Failed to refresh display: {}", e),
+                }
+                gpu.debug_and_refresh();
+
+                // Store GPU globally if you want to use it later
+                // GLOBAL_GPU = Some(gpu);
+            }
+            Err(e) => {
+                serial_println!("Failed to initialize VirtIO-GPU: {}", e);
+            }
         }
     } else {
-        serial_println!("No VirtIO-GPU device found.");
+        serial_println!("No VirtIO-GPU device found");
     }
 
     serial_println!("Entering an infinite loop.");
