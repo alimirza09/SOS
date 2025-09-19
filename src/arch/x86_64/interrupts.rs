@@ -1,4 +1,4 @@
-use crate::{gdt, hlt_loop, println};
+use crate::{gdt, hlt_loop, println, syscall};
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
 use spin;
@@ -45,6 +45,7 @@ lazy_static! {
         idt[InterruptIndex::AtaPrimary.as_usize()].set_handler_fn(ata_primary_interrupt_handler);
         idt[InterruptIndex::AtaSecondary.as_usize()]
             .set_handler_fn(ata_secondary_interrupt_handler);
+        idt[0x80].set_handler_fn(syscall_handler);
 
         idt
     };
@@ -52,6 +53,21 @@ lazy_static! {
 
 pub fn init_idt() {
     IDT.load();
+}
+
+extern "x86-interrupt" fn syscall_handler(_stack_frame: InterruptStackFrame) {
+    let num: u64;
+    let a0: u64;
+    let a1: u64;
+    let a2: u64;
+    unsafe {
+        core::arch::asm!("mov {}, rax", out(reg) num);
+        core::arch::asm!("mov {}, rdi", out(reg) a0);
+        core::arch::asm!("mov {}, rsi", out(reg) a1);
+        core::arch::asm!("mov {}, rdx", out(reg) a2);
+    }
+
+    crate::syscall::syscall_identifier(num, a0, a1, a2);
 }
 
 extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {

@@ -1,4 +1,4 @@
-use crate::drivers::pci::{PciBarType, PciDevice};
+use crate::drivers::pci::PciDevice;
 use crate::serial_println;
 use alloc::vec::Vec;
 use core::ptr::{read_volatile, write_volatile};
@@ -318,7 +318,6 @@ impl VirtioGpu {
             self.write_common_u16(VIRTIO_PCI_COMMON_Q_SELECT, 0);
             self.write_common_u16(VIRTIO_PCI_COMMON_Q_SIZE, QUEUE_SIZE);
 
-            // Allocate buffers separately to avoid borrowing conflicts
             let desc_buf_idx = {
                 self.alloc_dma_buffer(2 * 4096, mapper, frame_allocator)?;
                 self.dma_buffers.len() - 1
@@ -332,7 +331,6 @@ impl VirtioGpu {
                 self.dma_buffers.len() - 1
             };
 
-            // Now we can safely access the buffers
             let desc_buf = &self.dma_buffers[desc_buf_idx];
             let avail_buf = &self.dma_buffers[avail_buf_idx];
             let used_buf = &self.dma_buffers[used_buf_idx];
@@ -390,13 +388,11 @@ impl VirtioGpu {
         let fb_size = (self.width * self.height * 4) as usize;
         let pages = (fb_size + 4095) / 4096;
 
-        // Allocate framebuffer and get its index
         let fb_buf_idx = {
             self.alloc_dma_buffer(pages * 4096, mapper, frame_allocator)?;
             self.dma_buffers.len() - 1
         };
 
-        // Now safely access the buffer
         let fb_buf = &self.dma_buffers[fb_buf_idx];
         self.framebuffer = fb_buf.virt as *mut u32;
         self.fb_phys = fb_buf.phys;
@@ -461,67 +457,101 @@ impl VirtioGpu {
         static mut DMA_OFFSET: u64 = 0;
 
         unsafe {
-            // Always allocate single pages to avoid complexity
-            // Even for large buffers, VirtIO can work with this approach
-            let pages_needed = (size + 4095) / 4096;
-            let total_size = pages_needed * 4096;
+            // For small buffers (like VirtIO commands), allocate single page
+            // For large buffers (like framebuffer), we'll handle them specially
+            if size <= 4096 {
+                let virt_addr = VirtAddr::new(DMA_BASE + DMA_OFFSET);
+                let flags =
+                    PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_CACHE;
 
-            let virt_addr = VirtAddr::new(DMA_BASE + DMA_OFFSET);
-            let flags =
-                PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_CACHE;
+                let page = Page::containing_address(virt_addr);
+                let frame = frame_allocator
+                    .allocate_frame()
+                    .ok_or("No frame available")?;
+                let phys_addr = frame.start_address().as_u64();
 
-            // For simplicity, allocate just one page even if more is requested
-            // This will work for most VirtIO structures which are small
-            let page = Page::containing_address(virt_addr);
-            let frame = frame_allocator
-                .allocate_frame()
-                .ok_or("No frame available")?;
-            let phys_addr = frame.start_address().as_u64();
+                match mapper.map_to(page, frame, flags, frame_allocator) {
+                    Ok(flush) => flush.flush(),
+                    Err(_) => {
+                        DMA_OFFSET += 0x10000;
+                        let new_virt_addr = VirtAddr::new(DMA_BASE + DMA_OFFSET);
+                        let new_page = Page::containing_address(new_virt_addr);
 
-            // Try the mapping
-            match mapper.map_to(page, frame, flags, frame_allocator) {
-                Ok(flush) => flush.flush(),
-                Err(_) => {
-                    // If mapping fails, try a different virtual address
-                    DMA_OFFSET += 0x10000; // Skip ahead to avoid conflicts
-                    let new_virt_addr = VirtAddr::new(DMA_BASE + DMA_OFFSET);
-                    let new_page = Page::containing_address(new_virt_addr);
+                        mapper
+                            .map_to(new_page, frame, flags, frame_allocator)
+                            .map_err(|_| "Mapping failed after retry")?
+                            .flush();
 
+                        let buffer = DmaBuffer {
+                            virt: new_virt_addr.as_mut_ptr(),
+                            phys: phys_addr,
+                            size: 4096,
+                        };
+
+                        core::ptr::write_bytes(buffer.virt, 0, buffer.size);
+                        self.dma_buffers.push(buffer);
+                        DMA_OFFSET += 4096;
+                        return Ok(());
+                    }
+                }
+
+                DMA_OFFSET += 4096;
+
+                let buffer = DmaBuffer {
+                    virt: virt_addr.as_mut_ptr(),
+                    phys: phys_addr,
+                    size: 4096,
+                };
+
+                core::ptr::write_bytes(buffer.virt, 0, buffer.size);
+                self.dma_buffers.push(buffer);
+                Ok(())
+            } else {
+                // For large buffers, allocate multiple pages
+                let pages_needed = (size + 4095) / 4096;
+                let total_size = pages_needed * 4096;
+
+                let virt_addr = VirtAddr::new(DMA_BASE + DMA_OFFSET);
+                let flags =
+                    PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_CACHE;
+
+                // Allocate and map all pages
+                let mut frames = Vec::new();
+                let mut current_virt_addr = virt_addr;
+
+                for _ in 0..pages_needed {
+                    let frame = frame_allocator
+                        .allocate_frame()
+                        .ok_or("No frame available")?;
+                    frames.push(frame);
+
+                    let page = Page::containing_address(current_virt_addr);
                     mapper
-                        .map_to(new_page, frame, flags, frame_allocator)
-                        .map_err(|_| "Mapping failed after retry")?
+                        .map_to(page, frame, flags, frame_allocator)
+                        .map_err(|_| "Large buffer mapping failed")?
                         .flush();
 
-                    // Use the new address
-                    let buffer = DmaBuffer {
-                        virt: new_virt_addr.as_mut_ptr(),
-                        phys: phys_addr,
-                        size: core::cmp::min(size, 4096), // Limit to one page
-                    };
-
-                    core::ptr::write_bytes(buffer.virt, 0, buffer.size);
-                    self.dma_buffers.push(buffer);
-                    DMA_OFFSET += 4096;
-                    return Ok(());
+                    current_virt_addr = VirtAddr::new(current_virt_addr.as_u64() + 4096);
                 }
+
+                // Use the physical address of the first frame
+                let phys_addr = frames[0].start_address().as_u64();
+
+                let buffer = DmaBuffer {
+                    virt: virt_addr.as_mut_ptr(),
+                    phys: phys_addr,
+                    size: total_size,
+                };
+
+                // Clear the buffer
+                core::ptr::write_bytes(buffer.virt, 0, buffer.size);
+                self.dma_buffers.push(buffer);
+
+                DMA_OFFSET += total_size as u64;
+                Ok(())
             }
-
-            DMA_OFFSET += 4096;
-
-            let buffer = DmaBuffer {
-                virt: virt_addr.as_mut_ptr(),
-                phys: phys_addr,
-                size: core::cmp::min(size, 4096), // Limit to one page
-            };
-
-            // Clear the buffer
-            core::ptr::write_bytes(buffer.virt, 0, buffer.size);
-            self.dma_buffers.push(buffer);
-            Ok(())
         }
     }
-
-    // Remove the separate functions since we're using one unified approach
 
     fn create_2d_resource(
         &mut self,
@@ -532,7 +562,6 @@ impl VirtioGpu {
         mapper: &mut OffsetPageTable,
         frame_allocator: &mut impl FrameAllocator<Size4KiB>,
     ) -> Result<(), &'static str> {
-        // Allocate command buffer
         let cmd_buf_idx = {
             self.alloc_dma_buffer(
                 core::mem::size_of::<VirtioGpuResourceCreate2d>(),
@@ -542,7 +571,6 @@ impl VirtioGpu {
             self.dma_buffers.len() - 1
         };
 
-        // Allocate response buffer
         let resp_buf_idx = {
             self.alloc_dma_buffer(
                 core::mem::size_of::<VirtioGpuCtrlHdr>(),
@@ -594,13 +622,11 @@ impl VirtioGpu {
         let cmd_size = core::mem::size_of::<VirtioGpuResourceAttachBacking>()
             + core::mem::size_of::<VirtioGpuMemEntry>();
 
-        // Allocate command buffer
         let cmd_buf_idx = {
             self.alloc_dma_buffer(cmd_size, mapper, frame_allocator)?;
             self.dma_buffers.len() - 1
         };
 
-        // Allocate response buffer
         let resp_buf_idx = {
             self.alloc_dma_buffer(
                 core::mem::size_of::<VirtioGpuCtrlHdr>(),
@@ -660,7 +686,6 @@ impl VirtioGpu {
         mapper: &mut OffsetPageTable,
         frame_allocator: &mut impl FrameAllocator<Size4KiB>,
     ) -> Result<(), &'static str> {
-        // Allocate command buffer
         let cmd_buf_idx = {
             self.alloc_dma_buffer(
                 core::mem::size_of::<VirtioGpuSetScanout>(),
@@ -670,7 +695,6 @@ impl VirtioGpu {
             self.dma_buffers.len() - 1
         };
 
-        // Allocate response buffer
         let resp_buf_idx = {
             self.alloc_dma_buffer(
                 core::mem::size_of::<VirtioGpuCtrlHdr>(),
@@ -725,7 +749,6 @@ impl VirtioGpu {
         mapper: &mut OffsetPageTable,
         frame_allocator: &mut impl FrameAllocator<Size4KiB>,
     ) -> Result<(), &'static str> {
-        // Allocate command buffer
         let cmd_buf_idx = {
             self.alloc_dma_buffer(
                 core::mem::size_of::<VirtioGpuTransferToHost2d>(),
@@ -735,7 +758,6 @@ impl VirtioGpu {
             self.dma_buffers.len() - 1
         };
 
-        // Allocate response buffer
         let resp_buf_idx = {
             self.alloc_dma_buffer(
                 core::mem::size_of::<VirtioGpuCtrlHdr>(),
@@ -790,7 +812,6 @@ impl VirtioGpu {
         mapper: &mut OffsetPageTable,
         frame_allocator: &mut impl FrameAllocator<Size4KiB>,
     ) -> Result<(), &'static str> {
-        // Allocate command buffer
         let cmd_buf_idx = {
             self.alloc_dma_buffer(
                 core::mem::size_of::<VirtioGpuResourceFlush>(),
@@ -800,7 +821,6 @@ impl VirtioGpu {
             self.dma_buffers.len() - 1
         };
 
-        // Allocate response buffer
         let resp_buf_idx = {
             self.alloc_dma_buffer(
                 core::mem::size_of::<VirtioGpuCtrlHdr>(),
@@ -861,7 +881,7 @@ impl VirtioGpu {
 
             (*self.controlq.desc.add(desc_idx as usize)).addr = cmd_phys;
             (*self.controlq.desc.add(desc_idx as usize)).len = cmd_len;
-            (*self.controlq.desc.add(desc_idx as usize)).flags = 1;
+            (*self.controlq.desc.add(desc_idx as usize)).flags = 1; // VIRTQ_DESC_F_NEXT
             (*self.controlq.desc.add(desc_idx as usize)).next = (desc_idx + 1) % QUEUE_SIZE;
 
             let resp_idx = (desc_idx + 1) % QUEUE_SIZE;
@@ -871,20 +891,24 @@ impl VirtioGpu {
 
             (*self.controlq.desc.add(resp_idx as usize)).addr = resp_phys;
             (*self.controlq.desc.add(resp_idx as usize)).len = resp_len;
-            (*self.controlq.desc.add(resp_idx as usize)).flags = 2;
+            (*self.controlq.desc.add(resp_idx as usize)).flags = 2; // VIRTQ_DESC_F_WRITE
             (*self.controlq.desc.add(resp_idx as usize)).next = 0;
 
+            // Memory barrier before updating available ring
             core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
 
             let avail_idx = (*self.controlq.avail).idx;
             (*self.controlq.avail).ring[avail_idx as usize] = desc_idx;
 
+            // Memory barrier before notifying device
             core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
 
             (*self.controlq.avail).idx = avail_idx.wrapping_add(1);
 
+            // Notify the device
             write_volatile(self.notify_base as *mut u16, 0);
 
+            // Wait for response
             let start_used = self.controlq.used_idx;
             let mut timeout = 1000000;
             while (*self.controlq.used).idx == start_used && timeout > 0 {
@@ -899,13 +923,39 @@ impl VirtioGpu {
 
             self.controlq.used_idx = self.controlq.used_idx.wrapping_add(1);
 
-            let resp_hdr = resp_phys as *const VirtioGpuCtrlHdr;
-            let resp_type = (*resp_hdr).cmd_type;
+            // Find the response buffer by searching through DMA buffers
+            // Don't read directly from physical address!
+            let mut resp_virt: *const VirtioGpuCtrlHdr = core::ptr::null();
+            for buffer in &self.dma_buffers {
+                if buffer.phys == resp_phys {
+                    resp_virt = buffer.virt as *const VirtioGpuCtrlHdr;
+                    break;
+                }
+            }
+
+            if resp_virt.is_null() {
+                serial_println!("Could not find response buffer!");
+                return Err("Response buffer not found");
+            }
+
+            // Check what the device actually returned
+            let used_elem =
+                &(*self.controlq.used).ring[((*self.controlq.used).idx.wrapping_sub(1)) as usize];
+            serial_println!("Used element: id={}, len={}", used_elem.id, used_elem.len);
+
+            let resp_type = (*resp_virt).cmd_type;
+            serial_println!(
+                "Response type: 0x{:08x} (expected 0x{:08x})",
+                resp_type,
+                VIRTIO_GPU_RESP_OK_NODATA
+            );
 
             if resp_type != VIRTIO_GPU_RESP_OK_NODATA {
                 serial_println!("Command failed with response: 0x{:08x}", resp_type);
                 return Err("Command failed");
             }
+
+            serial_println!("Command completed successfully");
         }
         Ok(())
     }

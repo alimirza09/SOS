@@ -6,3 +6,4 @@ cargo bootimage --target x86_64-sos.json && echo "=== FINISHED COMPILING, RUNNIN
 	-serial stdio \
 	-device virtio-gpu-pci \
 	-display sdl\
+	-vga none
