@@ -60,6 +60,10 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     }
     serial_println!("==================================");
 
+    if let Err(e) = sos::drivers::ata::init_global_filesystem() {
+        println!("Failed to init filesystem: {}", e);
+    }
+
     sos::syscall::test_syscalls();
 
     serial_println!("Entering an infinite loop.");
@@ -162,124 +166,4 @@ fn processors() -> ! {
 
     println!("Starting executor...");
     executor.run();
-}
-
-use sos::drivers::{ata::*, clear_screen};
-use sos::serial_print;
-
-fn test_ata_driver_safe() {
-    println!("Starting comprehensive ATA test...");
-
-    unsafe {
-        use x86_64::instructions::port::Port;
-
-        println!("Testing basic port access...");
-
-        let mut status_port = Port::<u8>::new(0x1F7);
-        let status = status_port.read();
-        println!("Primary ATA status port read: 0x{:02X}", status);
-
-        let mut secondary_status_port = Port::<u8>::new(0x177);
-        let secondary_status = secondary_status_port.read();
-        println!("Secondary ATA status port read: 0x{:02X}", secondary_status);
-
-        println!("I/O port access works, proceeding with comprehensive ATA test");
-        test_ata_driver_comprehensive();
-    }
-}
-
-pub fn test_ata_driver_comprehensive() {
-    crate::serial_println!("=== COMPREHENSIVE ATA DRIVER TEST START ===");
-
-    let devices_to_test = [
-        ("Primary Master", AtaDevice::Master, true),
-        ("Primary Slave", AtaDevice::Slave, true),
-        ("Secondary Master", AtaDevice::Master, false),
-        ("Secondary Slave", AtaDevice::Slave, false),
-    ];
-
-    let mut found_devices = 0;
-
-    for (name, device, use_primary) in devices_to_test.iter() {
-        crate::serial_println!("Checking {}...", name);
-
-        let controller = if *use_primary {
-            &mut PRIMARY_ATA.lock()
-        } else {
-            &mut SECONDARY_ATA.lock()
-        };
-
-        match controller.identify(*device) {
-            Ok(identify_data) => {
-                found_devices += 1;
-                let info = identify_data;
-
-                crate::serial_println!("{} found:", name);
-                crate::serial_println!("  Model: {}", info.model);
-                crate::serial_println!("  Serial: {}", info.serial);
-                crate::serial_println!("  Firmware: {}", info.firmware);
-                crate::serial_println!("  Sectors: {}", info.sectors);
-                crate::serial_println!(
-                    "  Capacity: {} MB ({} GB)",
-                    info.capacity_mb(),
-                    info.capacity_gb()
-                );
-                crate::serial_println!("  LBA48 Support: {}", info.supports_lba48);
-                crate::serial_println!("  Sector Size: {} bytes", info.sector_size);
-
-                crate::println!("{}: {} - {} MB", name, info.model, info.capacity_mb());
-
-                if info.sectors > 0 {
-                    test_read_sectors(name, controller, *device);
-                }
-            }
-            Err(e) => {
-                crate::serial_println!("{} error: {:?}", name, e);
-            }
-        }
-    }
-
-    crate::println!("Found {} ATA devices total", found_devices);
-    crate::serial_println!("=== COMPREHENSIVE ATA DRIVER TEST COMPLETE ===");
-}
-
-fn test_read_sectors(name: &str, controller: &mut AtaController, device: AtaDevice) {
-    let mut buffer = [0u8; 512];
-
-    match { controller.read_sectors(device, 0, 1, &mut buffer) } {
-        Ok(()) => {
-            serial_println!("Successfully read sector 0 from {}", name);
-
-            if buffer[510] == 0x55 && buffer[511] == 0xAA {
-                serial_println!("Valid MBR signature found");
-                println!("{} MBR: Valid", name);
-            } else {
-                println!("{} MBR: Invalid or missing", name);
-            }
-
-            serial_print!("First 32 bytes of sector 0: ");
-            for i in 0..32 {
-                if i % 16 == 0 {
-                    serial_println!();
-                    serial_print!("{:04X}: ", i);
-                }
-                serial_print!("{:02X} ", buffer[i]);
-            }
-            serial_println!();
-
-            serial_print!("As ASCII: ");
-            for i in 0..32 {
-                let c = buffer[i];
-                if c >= 0x20 && c <= 0x7E {
-                    serial_print!("{}", c as char);
-                } else {
-                    serial_print!(".");
-                }
-            }
-            serial_println!();
-        }
-        Err(e) => {
-            serial_println!("Error reading sector from {}: {:?}", name, e);
-        }
-    }
 }

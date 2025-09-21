@@ -60,6 +60,7 @@ extern "x86-interrupt" fn syscall_handler(_stack_frame: InterruptStackFrame) {
     let a0: u64;
     let a1: u64;
     let a2: u64;
+
     unsafe {
         core::arch::asm!("mov {}, rax", out(reg) num);
         core::arch::asm!("mov {}, rdi", out(reg) a0);
@@ -67,7 +68,11 @@ extern "x86-interrupt" fn syscall_handler(_stack_frame: InterruptStackFrame) {
         core::arch::asm!("mov {}, rdx", out(reg) a2);
     }
 
-    crate::syscall::syscall_identifier(num, a0, a1, a2);
+    let result = crate::syscall::syscall_identifier(num, a0, a1, a2);
+
+    unsafe {
+        core::arch::asm!("mov rax, {}", in(reg) result);
+    }
 }
 
 extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {
