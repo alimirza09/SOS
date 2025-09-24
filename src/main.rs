@@ -21,15 +21,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     set_colors(Color::Green, Color::Black);
     println!("Welcome to sOS!");
     serial_println!("Welcome to sOS!");
-    sos::init();
-
-    use sos::memory::{allocator, paging, paging::BootInfoFrameAllocator};
-    use x86_64::VirtAddr;
-
-    let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset);
-    let mut frame_allocator = unsafe { BootInfoFrameAllocator::init(&boot_info.memory_map) };
-    let mut mapper = unsafe { paging::init(phys_mem_offset, &mut frame_allocator) };
-    allocator::init_heap(&mut mapper, &mut frame_allocator).expect("Heap initialization failed");
+    let (mut frame_allocator, mut mapper) = sos::init(boot_info);
 
     if let Some(gpu_dev) = sos::drivers::pci::find_virtio_gpu() {
         serial_println!("Initializing VirtIO-GPU");

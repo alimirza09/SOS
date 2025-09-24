@@ -4,7 +4,7 @@ use crate::alloc::{
     vec::Vec,
 };
 use crate::drivers::ata::{
-    fs_create_file, fs_delete_file, fs_list_files, fs_read_file, init_global_filesystem,
+    fs_create_file, fs_delete_file, fs_read_file, init_global_filesystem,
 };
 use crate::serial_println;
 use spin::Mutex;
