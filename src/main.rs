@@ -6,6 +6,7 @@ extern crate alloc;
 use alloc::sync::Arc;
 use bootloader::{entry_point, BootInfo};
 use core::panic::PanicInfo;
+use sos::ata::test_ata_driver_comprehensive;
 
 use core::ptr::addr_of_mut;
 use sos::arch::x86_64::smp::{start_one_ap, CPUS, MAX_CPUS};
@@ -52,11 +53,8 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     }
     serial_println!("==================================");
 
-    if let Err(e) = sos::drivers::ata::init_global_filesystem() {
-        println!("Failed to init filesystem: {}", e);
-    }
-
-    sos::syscall::test_syscalls();
+    sos::ata::test_ata_driver_comprehensive();
+    sos::fs::fat::test_fat32_on_primary_slave();
 
     serial_println!("Entering an infinite loop.");
     sos::hlt_loop();

@@ -6,6 +6,7 @@ extern crate alloc;
 
 pub mod arch;
 pub mod drivers;
+pub mod fs;
 pub mod memory;
 pub mod sched;
 pub mod sync;
@@ -40,10 +41,6 @@ pub fn init(boot_info: &'static BootInfo) -> (BootInfoFrameAllocator, OffsetPage
     let mut frame_allocator = unsafe { BootInfoFrameAllocator::init(&boot_info.memory_map) };
     let mut mapper = unsafe { paging::init(phys_mem_offset, &mut frame_allocator) };
     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("Heap initialization failed");
-
-    if let Err(e) = drivers::ata::init_global_filesystem() {
-        println!("Failed to init filesystem: {}", e);
-    }
 
     (frame_allocator, mapper)
 }
