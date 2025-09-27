@@ -9,9 +9,10 @@ A hobbyOS written in Rust.
 - An ATA PIO driver
 - A Virtio-gpu driver for qemu
 - Full Paging Support
-- Full 64 bit only OS
+- Full 64 bit support
+
 
 ## License
 
 This project is licensed under the GNU General Public License v3 (GPL-3.0-or-later).  
-See the [LICENSE](LICENSE) file for details.
+See the [LICENSE](LICENSE) file for details or visit <https://www.gnu.org/licenses/>.
