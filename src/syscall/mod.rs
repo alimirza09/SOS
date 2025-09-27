@@ -1,3 +1,5 @@
+use spin::Mutex;
+
 use crate::fs::syscalls::{sys_close, sys_open, sys_read, sys_unlink, sys_write};
 use crate::serial_println;
 
@@ -27,7 +29,7 @@ pub fn test_syscalls_filesystem_fixed() -> Result<(), &'static str> {
     static FILENAME: &[u8] = b"test.txt\0";
     static TEST_CONTENT: &[u8] = b"Hello, filesystem syscalls!\nThis is a test file.\n";
 
-    static mut READ_BUFFER: [u8; 1024] = [0u8; 1024];
+    static READ_BUFFER: Mutex<[u8; 1024]> = Mutex::new([0u8; 1024]);
 
     let fd = syscall_identifier(SYS_OPEN, FILENAME.as_ptr() as u64, 1, 0);
 
@@ -57,14 +59,14 @@ pub fn test_syscalls_filesystem_fixed() -> Result<(), &'static str> {
     let read_ret = syscall_identifier(
         SYS_READ,
         read_fd,
-        unsafe { READ_BUFFER.as_mut_ptr() as u64 },
-        unsafe { READ_BUFFER.len() as u64 },
+        READ_BUFFER.lock().as_mut_ptr() as u64,
+        READ_BUFFER.lock().len() as u64,
     );
     serial_println!("Read returned: {} bytes", read_ret);
 
     if read_ret != u64::MAX && read_ret > 0 {
         let bytes_read = read_ret as usize;
-        let read_data = unsafe { &READ_BUFFER[..bytes_read] };
+        let read_data = &READ_BUFFER.lock()[..bytes_read];
 
         if read_data == TEST_CONTENT {
             serial_println!("✓ File content verification passed!");
