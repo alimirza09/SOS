@@ -5,7 +5,7 @@ use spin::Mutex;
 
 use crate::fs::ata_block::SosAtaBlockDevice;
 
-struct DummyTime;
+pub struct DummyTime;
 impl TimeSource for DummyTime {
     fn get_timestamp(&self) -> Timestamp {
         Timestamp {
@@ -220,10 +220,10 @@ pub fn test_fat32() {
     let test_dir = "TESTDIR";
     match create_dir(test_dir) {
         Ok(()) => {
-            println!("FAT32 test:  Directory created successfully");
+            println!("FAT32 test: Directory created successfully");
         }
         Err(e) => {
-            println!("FAT32 test:  Directory creation failed: {}", e);
+            println!("FAT32 test: Directory creation failed: {}", e);
         }
     }
 

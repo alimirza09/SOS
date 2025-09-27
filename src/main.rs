@@ -54,6 +54,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 
     sos::ata::test_ata_driver_comprehensive();
     sos::fs::fat::test_fat32_with_device(sos::ata::AtaDevice::Slave, 131072);
+    sos::syscall::test_syscalls();
 
     serial_println!("Entering an infinite loop.");
     sos::hlt_loop();

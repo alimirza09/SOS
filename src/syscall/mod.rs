@@ -1,16 +1,28 @@
-use spin::Mutex;
-
-use crate::fs::syscalls::{sys_close, sys_open, sys_read, sys_unlink, sys_write};
+use crate::fs::syscalls::{
+    sys_close, sys_listdir, sys_mkdir, sys_open, sys_read, sys_rmdir, sys_unlink, sys_write,
+};
 use crate::serial_println;
+use spin::Mutex;
 
 pub const SYS_OPEN: u64 = 0;
 pub const SYS_READ: u64 = 1;
 pub const SYS_WRITE: u64 = 2;
 pub const SYS_CLOSE: u64 = 3;
 pub const SYS_UNLINK: u64 = 4;
+pub const SYS_MKDIR: u64 = 5;
+pub const SYS_RMDIR: u64 = 6;
+pub const SYS_LISTDIR: u64 = 7;
 
-pub const SYSCALLS: &[fn(u64, u64, u64) -> u64] =
-    &[sys_open, sys_read, sys_write, sys_close, sys_unlink];
+pub const SYSCALLS: &[fn(u64, u64, u64) -> u64] = &[
+    sys_open,
+    sys_read,
+    sys_write,
+    sys_close,
+    sys_unlink,
+    sys_mkdir,
+    sys_rmdir,
+    sys_listdir,
+];
 
 pub fn syscall_identifier(num: u64, a0: u64, a1: u64, a2: u64) -> u64 {
     let idx = num as usize;
