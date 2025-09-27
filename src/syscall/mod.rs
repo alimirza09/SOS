@@ -36,7 +36,7 @@ pub fn syscall_identifier(num: u64, a0: u64, a1: u64, a2: u64) -> u64 {
 }
 
 pub fn test_syscalls_filesystem_fixed() -> Result<(), &'static str> {
-    serial_println!("=== Fixed Filesystem Syscall Test ===");
+    serial_println!("=== Filesystem Syscall Test ===");
 
     static FILENAME: &[u8] = b"test.txt\0";
     static TEST_CONTENT: &[u8] = b"Hello, filesystem syscalls!\nThis is a test file.\n";
