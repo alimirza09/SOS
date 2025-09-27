@@ -1,4 +1,4 @@
-# SOS
+# sOS
 A hobbyOS written in Rust.
 
 ## Current Progress
