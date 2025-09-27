@@ -1,7 +1,8 @@
 [package]
-name = "sos"
+name = "sOS"
 version = "0.1.0"
 edition = "2021"
+authors = ["Muhammad Ali Mirza"]
 include = ["**/*.rs", "Cargo.toml"]
 
 [dependencies]
