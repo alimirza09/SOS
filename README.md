@@ -1,7 +1,7 @@
-# SOS:
+# SOS
 A hobbyOS written in Rust.
 
-## Current Progress:
+## Current Progress
 
 - A Linked List Heap Allocator
 - Multicore Support
